@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS app_user (
     nickname VARCHAR(100) NOT NULL COMMENT '昵称；应用层校验非空白，最多100字',
     avatar_style VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'INITIAL' COMMENT '内置头像；应用层校验INITIAL=昵称字（默认，按当前昵称派生）、FLOWER=小花、SUN=小太阳、SPROUT=新芽，不存图片',
     timezone VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'Asia/Shanghai' COMMENT 'IANA时区；应用层校验非空白、时区有效性，最多64字',
+    notification_email VARCHAR(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL COMMENT '本人通知收件邮箱，NULL表示未设置或清空，不作为登录账号、不向对方公开；应用层校验为单个有效地址且最多320字，更换或清空时同事务取消本人QUEUED/PROCESSING邮件任务并清空token及租约，不转投新地址',
     active_connection_id BIGINT NULL COMMENT '当前有效连接的逻辑引用；在用户行锁下维护；逻辑外键 pair_connection.id，由应用层校验关联及维护引用',
     share_availability BOOLEAN NOT NULL DEFAULT FALSE COMMENT '向当前连接展示忙闲，默认关闭；应用层校验0=关闭、1=开启',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
@@ -233,10 +234,12 @@ CREATE TABLE IF NOT EXISTS commitment (
     KEY idx_commitment_source (source_type, source_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='由履行者管理的个人承诺';
 
--- 每用户每资源保留一条提醒记录，设置/重设及实际取消时更新此行并递增 revision，取消后保留行。
+-- 每用户每资源保留一条提醒记录，设置/重设（含仅改方式）及实际取消时递增 revision，取消后保留行。
 -- 扫描 PENDING 且 scheduled_at <= 当前 UTC 时间的全部记录，不限于当前分钟。
--- 锁定并再次验证提醒 revision、状态和资源权限；插入通知与改为 FIRED 必须同事务。
--- 提醒通知 dedupe_key 约定为 reminder:<id>:<revision>，防止重试重复发送。
+-- 按连接、用户、业务资源、提醒、通知、投递任务顺序加锁，重新校验修订、状态与权限。
+-- 插入站内通知、按组合方式创建邮件任务及提醒置 FIRED 必须同事务；SMTP 在提交后由独立消费者执行。
+-- 提醒通知 dedupe_key 为 reminder:<id>:<revision>，邮件任务按通知与渠道去重，防止重复生成。
+-- 重设、取消及业务清理同事务取消相关 QUEUED/PROCESSING 邮件任务并清空租约，包含已 FIRED 提醒生成的任务。
 -- reminder：用户为资源设置的私人提醒。
 CREATE TABLE IF NOT EXISTS reminder (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '提醒主键',
@@ -244,8 +247,9 @@ CREATE TABLE IF NOT EXISTS reminder (
     resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '提醒资源类型；应用层校验MEMORY_CARD=卡片、CALENDAR_EVENT=事件、COMMITMENT=承诺',
     resource_id BIGINT NOT NULL COMMENT '资源主键；应用层校验>0及接收者当前访问权限，COMMITMENT须属于接收者且为OPEN，CALENDAR_EVENT不能已取消，MEMORY_CARD不能已删除；扫描触发前重新校验',
     scheduled_at DATETIME(6) NOT NULL COMMENT 'UTC 绝对提醒时间；事件改期不自动修改',
-    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，首次为1，每次设置/重设（含相同时刻）及实际取消时递增，业务清理取消PENDING亦递增；合法重复取消不递增，触发与事件改期不递增',
-    status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT '提醒状态；应用层校验PENDING=待触发、FIRED=已触发、CANCELLED=已取消',
+    delivery_mode VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IN_APP' COMMENT '私人提醒方式；应用层校验IN_APP=站内提醒（默认）、IN_APP_AND_MAIL=站内提醒加邮件，不支持单独邮件；组合方式保存时须本人有效邮箱及部署邮件能力可用，到时仅向本人发送通用邮件',
+    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，首次为1，每次设置/重设（含相同时刻或仅改方式）及实际取消时递增，业务清理取消PENDING亦递增；合法重复取消、触发与事件改期不递增；重设同事务取消旧修订未完成邮件任务，取消同事务清理所有未完成邮件任务（含FIRED所生成任务）并使token失效',
+    status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT '提醒状态；应用层校验PENDING=待触发、FIRED=到时处理已持久化（不代表邮件已送达）、CANCELLED=已取消；业务清理同时取消相关未完成邮件任务，重新分享、打开或连接均不自动恢复',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
@@ -266,8 +270,8 @@ CREATE TABLE IF NOT EXISTS notification (
     message VARCHAR(255) NOT NULL COMMENT '通用文案，不存私密正文或标题；应用层校验非空白，最多255字',
     dedupe_key VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务操作或提醒修订的唯一去重键；应用层校验非空白，最多191字',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
-    read_at DATETIME(6) NULL COMMENT 'UTC首次已读时间，NULL为未读；应用层校验仅接收者可标记当前可见通知，重复调用保留首次时间',
-    invalidated_at DATETIME(6) NULL COMMENT 'UTC永久失效时间，NULL表示尚未标记失效；应用层在撤回、删除、撤销分享或解除连接导致通知失去访问权时同事务写入，禁止因再次分享或重连清空；查询先排除非空记录，仍须实时鉴权',
+    read_at DATETIME(6) NULL COMMENT 'UTC首次已读时间，NULL为未读；应用层校验仅接收者可标记当前可见通知，重复调用保留首次时间，站内已读不取消邮件任务',
+    invalidated_at DATETIME(6) NULL COMMENT 'UTC永久失效时间，NULL表示尚未标记失效；应用层在撤回、删除、撤销分享或解除连接导致通知失去访问权时同事务写入并取消关联未完成邮件任务，禁止因再次分享或重连清空；查询先排除非空记录，仍须实时鉴权',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
     PRIMARY KEY (id),
@@ -276,6 +280,40 @@ CREATE TABLE IF NOT EXISTS notification (
     KEY idx_notification_recipient_invalidated_created (recipient_id, invalidated_at, created_at),
     KEY idx_notification_resource (resource_type, resource_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仅含资源引用和通用文案的站内通知';
+
+-- 仅为组合方式的到时提醒创建 MAIL 任务，既有通知不回溯入队；队列不保存 SMTP 凭据或私密正文。
+-- 到时邮箱缺失或邮件能力不可用仍生成站内通知，邮件任务直接记 FAILED 并保存原因，不重新置提醒 PENDING。
+-- 领取与租约恢复事务仅锁任务行，按扫描索引使用 FOR UPDATE SKIP LOCKED，提交后才按业务锁顺序重新鉴权。
+-- 发送前校验通知未失效、资源可访问且未关闭、提醒仍为同修订 FIRED、邮箱快照仍匹配，以及 token 与租约有效。
+-- SMTP 在事务外执行；实际发起前再次检查取消与租约，回写以 id、PROCESSING、当前 token 及有效租约为条件。
+-- 临时失败按退避重排，过期租约按剩余次数恢复；旧 token 不能覆盖取消或新 worker，SMTP 发送仍可能重复。
+-- SENT/FAILED/CANCELLED 为自动终态；仅 FAILED 可经维护命令再次鉴权后人工重试，邮箱缺失任务须重新设置提醒。
+-- notification_delivery：邮件投递持久队列及尝试、租约和结果记录。
+CREATE TABLE IF NOT EXISTS notification_delivery (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '邮件投递任务主键',
+    notification_id BIGINT NOT NULL COMMENT '关联站内通知；逻辑外键 notification.id，由应用层校验关联及维护引用，须对应同一接收者、资源和提醒修订；同通知同渠道唯一',
+    reminder_id BIGINT NOT NULL COMMENT '产生任务的私人提醒；逻辑外键 reminder.id，由应用层校验关联及维护引用，资源与接收者须和关联通知一致；取消与权限清理包含FIRED所生成的未完成任务',
+    reminder_revision BIGINT NOT NULL COMMENT '到时创建任务时的提醒修订快照；应用层校验>=1，发送前须等于当前reminder.revision且提醒为FIRED；旧修订任务取消后不恢复',
+    recipient_id BIGINT NOT NULL COMMENT '邮件接收者；逻辑外键 app_user.id，由应用层校验关联及维护引用，必须与通知和提醒接收者相同，仅本人邮箱可作为收件地址',
+    channel VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'MAIL' COMMENT '投递渠道；应用层校验v1仅MAIL=邮件，站内通知独立落库，不在此队列投递',
+    to_address VARCHAR(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL COMMENT '到时入队的收件邮箱快照，最多320字；应用层校验仅邮箱缺失而直接FAILED时可空，QUEUED/PROCESSING必须为有效单个地址，发送前仍须匹配本人当前邮箱；地址变化取消任务，不转投新地址，缺失地址任务不能直接重排',
+    status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'QUEUED' COMMENT '投递状态；应用层校验QUEUED=等待尝试、PROCESSING=处理中、SENT=SMTP服务器已接受（不代表送达或已读）、FAILED=失败、CANCELLED=失效或取消；后三者为自动终态，仅FAILED经维护鉴权可人工重试，SENT/CANCELLED不重开',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT '领取尝试次数，含首次；应用层校验>=0，每次领取递增，默认最多5次由部署配置控制；临时失败退避重试，永久失败或次数耗尽置FAILED，人工重试经再次鉴权后重置为0',
+    next_attempt_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC下次尝试时间；应用层使用数据库UTC时钟设置与判断，QUEUED且到期才可领取；临时失败默认按1、5、15、60分钟退避，可配置，重试不重新生成站内通知',
+    lock_token CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '领取时生成的随机UUID租约凭证；应用层校验仅PROCESSING必填，其他状态为空，续租、失败处理与回写均校验当前token及有效租约；离开PROCESSING时与lease_until同时清空',
+    lease_until DATETIME(6) NULL COMMENT 'UTC租约截止时间；应用层校验仅PROCESSING必填，其他状态为空，生成与过期判断统一使用数据库UTC时钟，默认120秒由部署配置控制；仅当前有效token可续租，过期恢复使旧token失效',
+    sent_at DATETIME(6) NULL COMMENT 'UTC的SMTP服务器接受时间；应用层校验仅SENT时必填，其他状态为空，使用当前token及有效租约条件回写，不表示邮件已到达收件箱或已读',
+    last_error_code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '可空的最近脱敏失败码，最多64字；应用层校验填写时非空白，FAILED必填，含RECIPIENT_EMAIL_MISSING、MAIL_DISABLED、MAIL_CONFIG_INCOMPLETE；不存原始SMTP响应、完整邮箱、凭据或私密正文',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增，不能替代状态、token及租约校验',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_notification_delivery_notification_channel (notification_id, channel),
+    KEY idx_notification_delivery_status_next_attempt (status, next_attempt_at, id),
+    KEY idx_notification_delivery_status_lease (status, lease_until, id),
+    KEY idx_notification_delivery_reminder_revision_status (reminder_id, reminder_revision, status),
+    KEY idx_notification_delivery_recipient_status (recipient_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='邮件投递持久队列；业务校验与逻辑关联由应用层维护';
 
 -- Spring Session JDBC：保留官方字段及索引结构，将关联改为应用层维护的逻辑外键。
 -- https://raw.githubusercontent.com/spring-projects/spring-session/main/spring-session-jdbc/src/main/resources/org/springframework/session/jdbc/schema-mysql.sql

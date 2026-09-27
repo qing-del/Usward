@@ -103,7 +103,7 @@
     const pending = reminder?.status === 'PENDING';
     const mode = pending ? reminder.deliveryMode : 'NONE';
     const time = pending ? U.local(reminder.scheduledAt) : '';
-    return `<fieldset class="reminder-fields"><legend>${icon('bell',15)}自己的到时提醒 <small>可选</small></legend>${U.notificationModeField('deliveryMode','到时通知我',mode)}${U.field('reminder',label,'datetime-local',time)}${reminder&&!pending?`<p class="quiet-note">上次提醒${reminder.status==='FIRED'?'已触发':'已取消'} · 历史方式：${esc(U.reminderModeLabel(reminder.deliveryMode))}。重新开启需要明确选择方式与时间。</p>`:''}<p class="quiet-note">不通知不会创建计划；选择站内或邮件通知时必须填写时间。选择不通知或清空已有时间会取消提醒及未完成的提醒邮件。邮件只含通用文案，预览不发送真实邮件。</p></fieldset>`;
+    return `<fieldset class="reminder-fields"><legend>${icon('bell',15)}自己的到时提醒 <small>可选</small></legend>${U.notificationModeField('deliveryMode','到时通知我',mode)}${U.field('reminder',label,'datetime-local',time,'',pending?'data-utc-offset="'+U.offsetAt(reminder.scheduledAt)+'"':'')}${reminder&&!pending?`<p class="quiet-note">上次提醒${reminder.status==='FIRED'?'已触发':'已取消'} · 历史方式：${esc(U.reminderModeLabel(reminder.deliveryMode))}。重新开启需要明确选择方式与时间。</p>`:''}<p class="quiet-note">不通知不会创建计划；选择站内或邮件通知时必须填写时间。选择不通知或清空已有时间会取消提醒及未完成的提醒邮件。邮件只含通用文案，预览不发送真实邮件。</p></fieldset>`;
   };
   U.bindReminderFields = form => {
     const time = form.elements.namedItem('reminder');
@@ -119,8 +119,8 @@
     if (mode==='NONE') return null;
     if (!values.reminder) return '选择通知方式后，请填写私人提醒时间。';
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(values.reminder)) return '请选择有效的提醒时间。';
-    try {if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder)))) return '请选择有效的提醒时间。';}
-    catch (_) {return '请选择有效的提醒时间。';}
+    try {if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder,U.state.user.timezone,values.reminderOffset)))) return '请选择有效的提醒时间。';}
+    catch (error) {return error.message||'请选择有效的提醒时间。';}
     if (!modes[mode]) return '请选择不通知、站内通知或站内通知+邮件通知。';
     if (mode === 'IN_APP_AND_MAIL' && !U.mailCapability().available) return U.mailCapability().reason+' 提醒输入已保留，请修改后重新保存。';
     return null;
@@ -134,7 +134,7 @@
     if (!visibleTo(probe) || closed(probe)) return '这个内容已不可设置提醒。';
     if (reminder) {U.cancelMailTasks(d => d.reminderId === reminder.id); reminder.revision += 1;}
     else {reminder={id:U.uid('reminder'),resourceType:type,resourceId:id,recipient:U.state.user.username,revision:1};U.state.reminders.push(reminder);}
-    Object.assign(reminder,{scheduledAt:U.fromLocal(values.reminder),deliveryMode:values.deliveryMode||'IN_APP',status:'PENDING'});
+    Object.assign(reminder,{scheduledAt:U.fromLocal(values.reminder,U.state.user.timezone,values.reminderOffset),deliveryMode:values.deliveryMode||'IN_APP',status:'PENDING'});
     syncLegacy(reminder);
     return null;
   };

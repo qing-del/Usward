@@ -21,7 +21,7 @@ function preview(saved) {
   });
   context.window = context;
   const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname,'../../assets',file),'utf8'),context,{filename:file});
-  load('app.js');load('reminders.js');load('notifications.js');load('today.js');load('me.js');load('commitments.js');
+  load('app.js');load('time.js');load('reminders.js');load('notifications.js');load('today.js');load('me.js');load('commitments.js');
   const U = context.U;
   const env = {U,load,advance:ms=>{now+=ms;},saved:()=>{U.save();return storage.get('usward-preview-v1');}};
   U.close = () => {};

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS app_user (
     username VARCHAR(100) NOT NULL COMMENT '登录名，唯一；应用层校验非空白，最多100字',
     password_hash VARCHAR(255) NOT NULL COMMENT 'Spring Security自适应密码哈希，含算法标识；应用层校验非空白，最多255字',
     nickname VARCHAR(100) NOT NULL COMMENT '昵称；应用层校验非空白，最多100字',
+    avatar_style VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'INITIAL' COMMENT '内置头像；应用层校验INITIAL=昵称字（默认，按当前昵称派生）、FLOWER=小花、SUN=小太阳、SPROUT=新芽，不存图片',
     timezone VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'Asia/Shanghai' COMMENT 'IANA时区；应用层校验非空白、时区有效性，最多64字',
     active_connection_id BIGINT NULL COMMENT '当前有效连接的逻辑引用；在用户行锁下维护；逻辑外键 pair_connection.id，由应用层校验关联及维护引用',
     share_availability BOOLEAN NOT NULL DEFAULT FALSE COMMENT '向当前连接展示忙闲，默认关闭；应用层校验0=关闭、1=开启',
@@ -127,8 +128,8 @@ CREATE TABLE IF NOT EXISTS expression_reply (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '回应或发送者补充主键',
     expression_id BIGINT NOT NULL COMMENT '所属表达；逻辑外键 expression.id，由应用层校验关联及维护引用',
     author_id BIGINT NOT NULL COMMENT '作者，业务层校验为表达成员；逻辑外键 app_user.id，由应用层校验关联及维护引用',
-    preset VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '可选预设回应；应用层校验LATER=晚点找你、AVAILABLE_NOW=现在方便、ANOTHER_TIME=换个时间；为空时body必填且非空白',
-    body TEXT NULL COMMENT '可选自由回应或补充；应用层校验最多1000字；preset为空时必填且非空白',
+    preset VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '接收者的可选预设回应；应用层校验LATER=晚点找你、AVAILABLE_NOW=现在方便、ANOTHER_TIME=换个时间；为空时body必填且非空白，发送者补充时必须为空',
+    body TEXT NULL COMMENT '可选自由回应或补充；应用层校验最多1000字；preset为空时必填且非空白，发送者补充必须使用自由正文',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     PRIMARY KEY (id),
     KEY idx_expression_reply_expression_created (expression_id, created_at),
@@ -146,7 +147,7 @@ CREATE TABLE IF NOT EXISTS calendar_invitation (
     target_event_id BIGINT NULL COMMENT '目标共同事件逻辑引用；应用层校验CREATE时为空、CHANGE时必填，在事件行锁下校验目标有效性；逻辑外键 calendar_event.id，由应用层校验关联及维护引用',
     base_event_version BIGINT NULL COMMENT '目标事件版本；应用层校验CREATE时为空、CHANGE时必填且>=0，在事件行锁下校验版本一致',
     previous_invitation_id BIGINT NULL COMMENT '替代邀约所关联的上一邀约；逻辑外键 calendar_invitation.id，由应用层校验关联及维护引用',
-    source_expression_id BIGINT NULL COMMENT '可选关联表达，读取时鉴权；逻辑外键 expression.id，由应用层校验关联及维护引用',
+    source_expression_id BIGINT NULL COMMENT '可选关联表达；应用层校验仅CREATE可填写，CHANGE时为空，设置时须属于当前连接且未撤回，读取时重新鉴权；逻辑外键 expression.id，由应用层校验关联及维护引用',
     title VARCHAR(100) NOT NULL COMMENT '提议主题；应用层校验非空白，最多100字',
     starts_at DATETIME(6) NULL COMMENT '带时间安排的UTC开始时间；应用层校验与ends_at同时非空，且start_date、end_date_exclusive均为空；全天安排时为空',
     ends_at DATETIME(6) NULL COMMENT '带时间安排的UTC结束时间；应用层校验与starts_at同时非空且大于starts_at；全天安排时为空',
@@ -187,15 +188,15 @@ CREATE TABLE IF NOT EXISTS calendar_event (
     note TEXT NULL COMMENT '个人备注始终私密；共同事件为双方确认的说明；应用层校验最多5000字',
     location VARCHAR(255) NULL COMMENT '地点；个人事件不通过忙闲接口暴露',
     availability VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '个人时间状态；应用层校验PERSONAL时必填且BUSY=忙、NEGOTIABLE=可商量、FREE=有空，SHARED时为空',
-    share_title BOOLEAN NOT NULL DEFAULT FALSE COMMENT '个人忙闲块是否额外分享标题；应用层校验0=不分享、1=分享',
+    share_title BOOLEAN NOT NULL DEFAULT FALSE COMMENT '个人忙闲块是否额外分享标题；应用层校验0=不分享、1=分享，SHARED时必须为0',
     offline_confirmed_at DATETIME(6) NULL COMMENT 'UTC线下确认记录时间；应用层校验仅PERSONAL可填写，SHARED时为空',
     status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'CONFIRMED' COMMENT '事件状态；应用层校验CONFIRMED=已确认、CANCELLED=已取消',
     origin_invitation_id BIGINT NULL COMMENT '原始创建邀约，唯一且改期不变；应用层校验PERSONAL时为空、SHARED时必填；逻辑外键 calendar_invitation.id，由应用层校验关联及维护引用',
-    pending_change_invitation_id BIGINT NULL COMMENT '待处理修改提案逻辑引用；应用层校验仅SHARED且CONFIRMED时可非空，事件行锁下维护，处理完清空；逻辑外键 calendar_invitation.id，由应用层校验关联及维护引用',
+    pending_change_invitation_id BIGINT NULL COMMENT '待处理修改提案逻辑引用；应用层校验仅SHARED且CONFIRMED时可非空，事件行锁下维护，处理完清空，仅维护此指针不递增事件version；逻辑外键 calendar_invitation.id，由应用层校验关联及维护引用',
     cancellation_reason TEXT NULL COMMENT '可选取消说明；应用层校验最多5000字',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
-    version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增，接受改期时递增',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '内容与状态版本；应用层校验>=0，内容或状态更新时在版本条件下递增，接受改期时递增；仅维护pending_change_invitation_id或私人提醒不递增',
     PRIMARY KEY (id),
     UNIQUE KEY uk_calendar_event_origin (origin_invitation_id),
     UNIQUE KEY uk_calendar_event_pending_change (pending_change_invitation_id),
@@ -212,12 +213,15 @@ CREATE TABLE IF NOT EXISTS commitment (
     shared_connection_id BIGINT NULL COMMENT '主动分享所绑定的连接，NULL 为私密；逻辑外键 pair_connection.id，由应用层校验关联及维护引用',
     title VARCHAR(100) NOT NULL COMMENT '承诺标题；应用层校验非空白，最多100字',
     body TEXT NULL COMMENT '可选说明；应用层校验最多5000字',
-    due_at DATETIME(6) NULL COMMENT 'UTC 截止时间，到期不改变 OPEN 状态',
+    due_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'NONE' COMMENT '截止模式；应用层校验NONE=无截止（due_at、due_date、due_timezone均为空）、INSTANT=精确时间（仅due_at必填）、DATE=日期截止（仅due_date、due_timezone必填）；创建默认NONE，修改截止时提交完整一组',
+    due_at DATETIME(6) NULL COMMENT 'UTC精确截止时间；应用层校验仅INSTANT时必填，其他模式为空；OPEN且当前时刻>=due_at时逾期，不自动改变状态',
+    due_date DATE NULL COMMENT '当地截止日期；应用层校验仅DATE时必填，其他模式为空；指定日期全天有效，OPEN从该日期在due_timezone中的下一日起始边界起逾期，边界按IANA规则计算，不假设一天固定24小时',
+    due_timezone VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '日期截止的IANA时区；应用层校验仅DATE时必填且非空白、时区有效，最多64字，其他模式为空；设置截止时固定，修改用户显示时区不重写',
     next_action TEXT NULL COMMENT '可选下一步；应用层校验最多5000字',
     status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'OPEN' COMMENT '承诺状态；应用层校验OPEN=待履行、DONE=已完成、CANCELLED=已取消',
     result TEXT NULL COMMENT '可选完成结果；应用层校验最多5000字',
     source_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '可选来源类型；应用层校验EXPRESSION=表达、MEMORY_CARD=卡片、CALENDAR_EVENT=事件，与source_id同时为空或同时填写',
-    source_id BIGINT NULL COMMENT '可选多态来源主键；应用层校验与source_type同时为空或同时填写，填写时>0，读取前鉴权',
+    source_id BIGINT NULL COMMENT '可选多态来源主键；应用层校验与source_type同时为空或同时填写，填写时>0，创建或更换来源及读取前鉴权；撤回表达视为来源不可用，承诺分享不授予来源访问权，不复制私密原文',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
@@ -225,10 +229,11 @@ CREATE TABLE IF NOT EXISTS commitment (
     KEY idx_commitment_owner_updated (owner_id, updated_at),
     KEY idx_commitment_shared_updated (shared_connection_id, updated_at),
     KEY idx_commitment_owner_status_due (owner_id, status, due_at),
+    KEY idx_commitment_owner_status_due_date (owner_id, status, due_kind, due_date),
     KEY idx_commitment_source (source_type, source_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='由履行者管理的个人承诺';
 
--- 每用户每资源保留一条提醒记录，编辑/重新设置时更新此行，revision 递增。
+-- 每用户每资源保留一条提醒记录，设置/重设及实际取消时更新此行并递增 revision，取消后保留行。
 -- 扫描 PENDING 且 scheduled_at <= 当前 UTC 时间的全部记录，不限于当前分钟。
 -- 锁定并再次验证提醒 revision、状态和资源权限；插入通知与改为 FIRED 必须同事务。
 -- 提醒通知 dedupe_key 约定为 reminder:<id>:<revision>，防止重试重复发送。
@@ -237,9 +242,9 @@ CREATE TABLE IF NOT EXISTS reminder (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '提醒主键',
     recipient_id BIGINT NOT NULL COMMENT '私人提醒接收者；逻辑外键 app_user.id，由应用层校验关联及维护引用',
     resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '提醒资源类型；应用层校验MEMORY_CARD=卡片、CALENDAR_EVENT=事件、COMMITMENT=承诺',
-    resource_id BIGINT NOT NULL COMMENT '资源主键；应用层校验>0及本人访问权限',
+    resource_id BIGINT NOT NULL COMMENT '资源主键；应用层校验>0及接收者当前访问权限，COMMITMENT须属于接收者且为OPEN，CALENDAR_EVENT不能已取消，MEMORY_CARD不能已删除；扫描触发前重新校验',
     scheduled_at DATETIME(6) NOT NULL COMMENT 'UTC 绝对提醒时间；事件改期不自动修改',
-    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，每次编辑递增',
+    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，首次为1，每次设置/重设（含相同时刻）及实际取消时递增，业务清理取消PENDING亦递增；合法重复取消不递增，触发与事件改期不递增',
     status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT '提醒状态；应用层校验PENDING=待触发、FIRED=已触发、CANCELLED=已取消',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
@@ -247,6 +252,7 @@ CREATE TABLE IF NOT EXISTS reminder (
     PRIMARY KEY (id),
     UNIQUE KEY uk_reminder_recipient_resource (recipient_id, resource_type, resource_id),
     KEY idx_reminder_status_scheduled (status, scheduled_at),
+    KEY idx_reminder_recipient_status_scheduled (recipient_id, status, scheduled_at),
     KEY idx_reminder_resource_status (resource_type, resource_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='资源级私人提醒';
 
@@ -260,19 +266,22 @@ CREATE TABLE IF NOT EXISTS notification (
     message VARCHAR(255) NOT NULL COMMENT '通用文案，不存私密正文或标题；应用层校验非空白，最多255字',
     dedupe_key VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务操作或提醒修订的唯一去重键；应用层校验非空白，最多191字',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
-    read_at DATETIME(6) NULL COMMENT 'UTC 已读时间，NULL 为未读',
+    read_at DATETIME(6) NULL COMMENT 'UTC首次已读时间，NULL为未读；应用层校验仅接收者可标记当前可见通知，重复调用保留首次时间',
+    invalidated_at DATETIME(6) NULL COMMENT 'UTC永久失效时间，NULL表示尚未标记失效；应用层在撤回、删除、撤销分享或解除连接导致通知失去访问权时同事务写入，禁止因再次分享或重连清空；查询先排除非空记录，仍须实时鉴权',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
     PRIMARY KEY (id),
     UNIQUE KEY uk_notification_dedupe (dedupe_key),
-    KEY idx_notification_recipient_read_created (recipient_id, read_at, created_at),
+    KEY idx_notification_recipient_invalidated_read_created (recipient_id, invalidated_at, read_at, created_at),
+    KEY idx_notification_recipient_invalidated_created (recipient_id, invalidated_at, created_at),
     KEY idx_notification_resource (resource_type, resource_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仅含资源引用和通用文案的站内通知';
 
 -- Spring Session JDBC：保留官方字段及索引结构，将关联改为应用层维护的逻辑外键。
 -- https://raw.githubusercontent.com/spring-projects/spring-session/main/spring-session-jdbc/src/main/resources/org/springframework/session/jdbc/schema-mysql.sql
 -- 将官方独立 CREATE INDEX 合并到 CREATE TABLE 内，保证重复执行不重复创建索引。
--- 会话 ID 使用区分大小写的排序规则；退出登录、过期清理及修改密码删除会话时，应用层须在同一事务先清理会话属性。
+-- 默认 Repository 的会话删除与过期清理依赖数据库级联删除；逻辑外键方案须定制这两类清理逻辑。
+-- 会话 ID 使用区分大小写的排序规则；退出登录、过期清理及修改密码删除会话时，应用层须在同一事务先删属性，再删会话。
 -- SPRING_SESSION：Spring Session JDBC 登录会话。
 CREATE TABLE IF NOT EXISTS SPRING_SESSION (
     PRIMARY_ID CHAR(36) NOT NULL COMMENT '内部会话 UUID',

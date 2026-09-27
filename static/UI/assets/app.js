@@ -10,6 +10,7 @@
     memory: '<rect x="5" y="3" width="15" height="18" rx="2"/><path d="M5 7H3m2 5H3m2 5H3m7-9h6m-6 4h6m-6 4h4"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
     bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 8-3 9h18c0-1-3-2-3-9ZM10 21h4"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m3 7 9 6 9-6"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     chevron: '<path d="m9 5 7 7-7 7"/>',
     left: '<path d="m15 5-7 7 7 7"/>',
@@ -140,12 +141,13 @@
   };
   U.unread = () => state.notifications.filter(n => !n.read && U.notificationVisible(n)).length;
   U.notificationVisible = n => {
+    if(n.invalidatedAt)return false;
     if(n.recipient && n.recipient!==state.user.username)return false;
     if(n.connectionId && n.connectionId!==state.connectionId)return false;
     if (n.kind === 'expression') {const x=U.find('expressions',n.resourceId);return x && U.expressionVisible(x) && x.status !== 'WITHDRAWN';}
     if (n.kind === 'invitation') {const i=U.find('invitations',n.resourceId);return i && U.shared(i);}
     if (n.kind === 'memory') {const m=U.find('memories',n.resourceId);return m && U.memoryVisible(m) && (!n.connectionId || (m.shared&&U.shared(m)));}
-    if (n.kind === 'event') {const e=U.find('events',n.resourceId);return e && U.eventVisible(e) && e.status !== 'CANCELLED';}
+    if (n.kind === 'event') {const e=U.find('events',n.resourceId);return e && U.eventVisible(e);}
     if (n.kind === 'commitment') {const c=U.find('commitments',n.resourceId);return c && U.commitmentVisible(c);}
     return n.kind === 'system';
   };
@@ -158,18 +160,6 @@
       if (end <= Date.now()) {i.status='EXPIRED';if(target) target.pendingChange=null;changed=true;}
     });
     if (changed) save();
-  };
-  U.refreshReminders = () => {
-    let changed=false;
-    [['memories','memory',U.memoryVisible],['events','event',U.eventVisible],['commitments','commitment',c=>c.owner==='me' && U.commitmentVisible(c)]].forEach(([collection,kind,visible]) => {
-      state[collection].forEach(r => {
-        const sharedMemory=kind==='memory'&&r.owner!=='me';const reminder=sharedMemory?r.privateReminders?.[state.user.username]:r.reminder;const fired=sharedMemory?r.firedPrivateReminders?.[state.user.username]:r.firedReminder;
-        if (reminder && visible(r) && r.status !== 'CANCELLED' && fired !== reminder && Date.parse(reminder) <= Date.now()) {
-          U.notify(kind,r.id,'你设置的私人提醒到了');if(sharedMemory){r.firedPrivateReminders ||= {};r.firedPrivateReminders[state.user.username]=reminder;}else r.firedReminder=reminder;changed=true;
-        }
-      });
-    });
-    if(changed) save();
   };
   U.render = () => {
     U.expire();U.refreshReminders();
@@ -213,7 +203,8 @@
     U.modal(title,`<form id="dialog-form" class="form-stack">${fields}<p class="form-message" role="alert"></p><div class="form-actions">${extra}<button type="button" class="btn secondary" data-action="close">取消</button><button class="btn primary" type="submit">${esc(label)}</button></div>${draft?'<p class="draft-note">关闭后会保留草稿，回来可以接着写。</p>':''}</form>`,{wide,eyebrow});
     const form=document.querySelector('#dialog-form');
     if(draft&&state.drafts[draft])Object.entries(state.drafts[draft]).forEach(([name,value])=>{const el=form.elements.namedItem(name);if(el && !(el instanceof RadioNodeList)){if(el.type==='checkbox')el.checked=!!value;else el.value=value;}});
-    const serialize=()=>{const values=Object.fromEntries(new FormData(form).entries());form.querySelectorAll('input[type=checkbox]').forEach(el=>values[el.name]=el.checked);return values;};
+    if(U.bindReminderFields)U.bindReminderFields(form);
+    const serialize=()=>{const values=Object.fromEntries(new FormData(form).entries());form.querySelectorAll('input[type=checkbox]').forEach(el=>values[el.name]=el.checked);const mode=form.elements.namedItem('deliveryMode');if(mode)values.deliveryMode=mode.value;return values;};
     if(draft)form.addEventListener('input',()=>{state.drafts[draft]=serialize();save();});
     form.addEventListener('submit',event=>{
       event.preventDefault();const values=serialize();const message=form.querySelector('.form-message');message.textContent='';

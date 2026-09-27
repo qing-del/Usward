@@ -1,0 +1,23 @@
+.reminder-fields{min-width:0;border:1px solid var(--line);border-radius:12px;padding:17px;display:flex;flex-direction:column;gap:13px;background:#f7f8f0}
+.reminder-fields legend{padding:0 7px;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--green)}
+.reminder-fields legend small{font-weight:400;color:var(--muted);font-size:10px;margin-left:4px}
+.reminder-fields select:disabled{opacity:.65;cursor:not-allowed}
+.reminder-fields option:disabled{color:#a5ad9b}
+.reminder-summary small{display:block;font-size:10px;margin-top:4px;color:var(--muted)}
+.notification-item{border-bottom:1px solid var(--line)}
+.notification-item .notification-row{border-bottom:0}
+.mail-delivery-link{display:flex;align-items:center;gap:7px;margin:0 0 15px 48px;text-align:left;font-size:10px;color:var(--green);max-width:calc(100% - 48px)}
+.mail-delivery-link span{min-width:0;overflow-wrap:anywhere}
+.mail-delivery-link svg{flex-shrink:0}
+.mail-delivery-link.failed{color:var(--danger)}
+.mail-message-preview{border:1px solid var(--line);border-radius:12px;background:var(--paper);padding:20px}
+.mail-message-preview h3{font-size:14px;margin:12px 0}
+.mail-message-preview p:not(.eyebrow){font-size:12px;line-height:1.9;color:var(--muted)}
+.mail-message-preview a{margin-top:15px}
+.email-value{overflow-wrap:anywhere;white-space:normal;max-width:180px;text-align:right}
+.reminder-list-item{padding:15px 0;border-bottom:1px solid var(--line)}
+.reminder-list-item:last-child{border-bottom:0;padding-bottom:0}
+.reminder-list-item strong{font-size:12px;font-weight:500}
+.reminder-list-item p{font-size:10px;color:var(--muted);margin:6px 0;line-height:1.8}
+.reminder-list-item .badge{margin-left:0;margin-bottom:9px;white-space:normal}
+@media(max-width:600px){.reminder-fields{padding:14px}.email-value{max-width:115px}.mail-delivery-link{margin-left:0;max-width:100%}.mail-message-preview{padding:17px}}

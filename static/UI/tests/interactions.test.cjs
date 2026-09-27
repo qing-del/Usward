@@ -208,3 +208,59 @@ test('acceptance and counter guard expiry; automatic expiry emits no notice',()=
   assert.match(env.submit({}),/过期|变化/);assert.equal(i.status,'EXPIRED');assert.equal(U.state.notifications.length,n);
   assert.match(U.putNotificationSetting('CALENDAR_INVITATION',i.id,'NONE',null),/已结束/);
 });
+
+test('commitment share and all shared state actions offer one mode, NONE still updates content',()=>{
+  const env=preview(),{U}=env;available(U);
+  U.actions['commitment-share']({id:'c1'});assert.match(env.form.html,/name="notificationMode"/);assert.doesNotMatch(env.form.html,/followUpMode/);
+  env.submit({notificationMode:'NONE'});const c=U.find('commitments','c1');assert.equal(c.shared,true);
+  U.actions['commitment-complete']({id:c.id});assert.doesNotMatch(env.form.html,/followUpMode/);
+  env.submit({result:'完成记录',notificationMode:'NONE'});assert.equal(c.status,'DONE');
+  U.actions['commitment-reopen']({id:c.id});env.submit({notificationMode:'NONE'});assert.equal(c.status,'OPEN');assert.equal(c.result,'');
+  U.actions['commitment-cancel']({id:c.id});env.submit({notificationMode:'NONE'});assert.equal(c.status,'CANCELLED');
+  assert.equal(U.state.notifications.filter(n=>n.resourceId===c.id&&n.sourceType==='BUSINESS').length,0);
+  assert.equal(U.myNotificationSetting('COMMITMENT',c.id),null);
+});
+
+test('shared completion preserves its business mail while cancelling private reminders, unavailable mail blocks status',()=>{
+  const env=preview(),{U}=env;available(U);
+  U.saveReminder('COMMITMENT','c2',{reminder:'2026-09-27T08:00',deliveryMode:'IN_APP_AND_MAIL'});U.refreshReminders();
+  U.actions['commitment-complete']({id:'c2'});U.state.partner.notificationEmail=null;
+  assert.match(env.submit({result:'完整完成记录',notificationMode:'IN_APP_AND_MAIL'}),/明确改选/);assert.equal(U.find('commitments','c2').status,'OPEN');
+  U.state.partner.notificationEmail='chenyu@example.com';assert.equal(env.submit({result:'完整完成记录',notificationMode:'IN_APP_AND_MAIL'}),undefined);
+  assert.equal(U.find('commitments','c2').status,'DONE');
+  assert.equal(U.state.mailDeliveries.find(d=>d.sourceType==='REMINDER_DUE').status,'CANCELLED');
+  assert.equal(U.state.mailDeliveries.find(d=>d.sourceType==='BUSINESS').status,'QUEUED');
+});
+
+test('only shared deadline edits use chosen business notification; private actions have no recipient',()=>{
+  const env=preview(),{U}=env;available(U);const c=U.find('commitments','c2');
+  const values={title:c.title,body:'只改说明',due:c.due,dueTime:'',nextAction:c.nextAction,reminder:'',deliveryMode:'NONE',notificationMode:'IN_APP_AND_MAIL'};
+  U.commitmentForm(c.id);env.submit(values);assert.equal(U.state.notifications.filter(n=>n.resourceId===c.id).length,0);
+  U.commitmentForm(c.id);env.submit({...values,due:'2026-10-04'});assert.equal(U.state.mailDeliveries.filter(d=>d.sourceType==='BUSINESS').length,1);
+  U.commitmentForm('c1');assert.doesNotMatch(env.form.html,/name="notificationMode"|followUpMode/);
+});
+
+test('three source detail entries create own commitments with correct canonical type and navigation',()=>{
+  for(const [action,sourceId,type,target] of [['commitment-from-expression','x1','EXPRESSION','expression-view'],['commitment-from-memory','m1','MEMORY_CARD','memory-view'],['commitment-from-event','e2','CALENDAR_EVENT','event-view']]){
+    const env=preview(),{U}=env;U.actions[action]({id:sourceId});
+    assert.equal(env.submit({title:'我的下一步',body:'',due:'',dueTime:'',nextAction:'',reminder:'',deliveryMode:'NONE'}),undefined);
+    const c=U.state.commitments[0];assert.equal(c.owner,'me');assert.equal(c.sourceType,type);assert.equal(c.sourceId,sourceId);
+    U.commitmentDetail(c.id);assert.match(env.modal.html,new RegExp('data-action="'+target+'"'));
+  }
+});
+
+test('withdrawn or inaccessible sources cannot create and sharing commitment grants no source access',()=>{
+  const env=preview(),{U}=env;U.commitmentForm(null,{sourceType:'EXPRESSION',sourceId:'x3'});assert.match(env.toast.message,/不可访问/);
+  U.actions['commitment-from-memory']({id:'m1'});U.find('memories','m1').deleted=true;
+  const length=U.state.commitments.length;assert.match(env.submit({title:'旧来源',body:'',due:'',dueTime:'',reminder:'',deliveryMode:'NONE'}),/来源已不可访问/);assert.equal(U.state.commitments.length,length);
+  U.find('memories','m1').deleted=false;U.actions['commitment-from-memory']({id:'m1'});env.submit({title:'私密来源',body:'',due:'',dueTime:'',reminder:'',deliveryMode:'NONE'});
+  const c=U.state.commitments[0];U.actions['commitment-share']({id:c.id});env.submit({notificationMode:'NONE'});U.switchAccount('chenyu');
+  U.commitmentDetail(c.id);assert.match(env.modal.html,/来源不可用/);assert.doesNotMatch(env.modal.html,/data-action="memory-view"/);
+});
+
+test('unsharing commitment permanently invalidates old notices across a new sharing episode',()=>{
+  const env=preview(),{U}=env;available(U);U.actions['commitment-share']({id:'c1'});env.submit({notificationMode:'IN_APP_AND_MAIL'});
+  const n=U.state.notifications.find(n=>n.resourceId==='c1');U.actions['commitment-unshare']({id:'c1'});
+  assert.ok(n.invalidatedAt);assert.equal(U.state.mailDeliveries[0].status,'CANCELLED');
+  U.actions['commitment-share']({id:'c1'});env.submit({notificationMode:'NONE'});U.switchAccount('chenyu');assert.equal(U.notificationVisible(n),false);
+});

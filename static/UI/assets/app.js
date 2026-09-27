@@ -259,9 +259,13 @@
   U.expressionForm=()=>{
     if(!U.connected())return U.connectionRequired();
     const selected=state.drafts['expression-new']?.type||U.presets[0];
-    const form=U.form('把想说的话，轻轻说出来',`<div class="expression-choices">${U.presets.map((p,i)=>`<label class="expression-choice"><input type="radio" name="type" value="${esc(p)}" ${p===selected?'checked':''}><span>${icon(['heart','chat','leaf','info','cup','edit'][i],18)}${esc(p)}</span></label>`).join('')}</div>${U.field('body','想多说一点 <small>前五项可跳过；自由留言必填</small>','textarea','','可以只选一种表达，也可以写几句话。')}<details class="optional-details"><summary>希望何时、怎样回应 · 可选</summary><div class="form-grid">${U.select('window','希望回应时间',['有空再看','今天聊聊','现在方便吗'],'有空再看')}${U.select('mode','希望回应方式',[['','不特别指定'],...['听我说','一起想办法','陪我一下','暂时只想告诉你']],'')}</div></details><div class="inline-note">${icon('leaf',16)}这些只是你的偏好。没有回应倒计时，也不会自动催促。</div>`,v=>{
+    const form=U.form('把想说的话，轻轻说出来',`<div class="expression-choices">${U.presets.map((p,i)=>`<label class="expression-choice"><input type="radio" name="type" value="${esc(p)}" ${p===selected?'checked':''}><span>${icon(['heart','chat','leaf','info','cup','edit'][i],18)}${esc(p)}</span></label>`).join('')}</div>${U.field('body','想多说一点 <small>前五项可跳过；自由留言必填</small>','textarea','','可以只选一种表达，也可以写几句话。')}<details class="optional-details"><summary>希望何时、怎样回应 · 可选</summary><div class="form-grid">${U.select('window','希望回应时间',['有空再看','今天聊聊','现在方便吗'],'有空再看')}${U.select('mode','希望回应方式',[['','不特别指定'],...['听我说','一起想办法','陪我一下','暂时只想告诉你']],'')}</div></details><div class="inline-note">${icon('leaf',16)}这些只是你的偏好。没有回应倒计时，也不会自动催促。</div>${U.notificationPlanFields('EXPRESSION')}`, (v,form)=>{
       if(v.type==='自由留言'&&!v.body)return '自由留言需要填写正文。';
-      state.expressions.unshift({id:U.uid('x'),sender:'me',type:v.type,body:v.body,window:v.window,mode:v.mode,status:'OPEN',replies:[],createdAt:new Date().toISOString(),connectionId:state.connectionId});U.notify('expression',state.expressions[0].id,'收到一条新的表达',state.partner.username);U.toast('表达已存入发出列表');
+      if(!U.presets.includes(v.type))return '请选择一种表达。';
+      const error=U.submitNotified(form,v,{action:'expression-create',resourceType:'EXPRESSION',notificationPlan:{outgoingMode:v.outgoingMode,followUpMode:v.followUpMode},message:'收到一条新的表达'},()=>{
+        const now=new Date().toISOString(),x={id:U.uid('x'),sender:'me',type:v.type,body:v.body,window:v.window,mode:v.mode,status:'OPEN',replies:[],createdAt:now,updatedAt:now,version:1,connectionId:state.connectionId};
+        state.expressions.unshift(x);return {type:'EXPRESSION',id:x.id};
+      });if(error)return error;U.toast('表达已存入发出列表');
     },{draft:'expression-new',label:'发送给 '+state.partner.name,eyebrow:'A LITTLE EXPRESSION',wide:true});
     // Radios are restored separately because namedItem returns a RadioNodeList.
     if(state.drafts['expression-new']?.type)form.querySelectorAll('[name=type]').forEach(el=>el.checked=el.value===selected);
@@ -270,13 +274,34 @@
     const x=U.find('expressions',id);if(!x||!U.expressionVisible(x))return U.toast('这条表达已不可访问',true);
     if(x.status==='WITHDRAWN')return U.modal('这条表达已撤回','<div class="inline-note">原文与回应不再显示。</div>');
     const mine=x.sender==='me';
-    U.modal(x.type,`<div class="detail-meta">${U.avatar(x.sender,'small')}<small class="muted">${esc(U.person(x.sender))} · ${U.date(x.createdAt)} ${U.time(x.createdAt)}</small>${U.badge(x.status==='OPEN'?'待回应':'已回应',x.status==='OPEN'?'peach':'green')}</div>${x.body?`<p class="modal-copy">${esc(x.body)}</p>`:''}<div class="detail-meta mt-16">${x.window?U.badge(x.window,'gray','clock'):''}${x.mode?U.badge(x.mode,'purple'):''}</div><p class="quiet-note">回应状态只表示是否回应，不代表事情已经解决。</p>${x.replies.length?`<hr class="divider"><div class="reply-list">${x.replies.map(r=>`<div class="reply-item">${U.avatar(r.author,'small')}<div><small class="muted">${esc(U.person(r.author))} · ${U.date(r.at)} ${U.time(r.at)}</small><p class="modal-copy">${esc(r.body)}</p></div></div>`).join('')}</div>`:''}${!mine?`<hr class="divider"><p class="detail-label">轻轻回应</p><div class="filter-chips">${['看到了，晚点找你','现在方便','想换个时间'].map(label=>`<button class="filter-chip" data-action="expression-quick-reply" data-id="${id}" data-value="${esc(label)}">${esc(label)}</button>`).join('')}</div>`:''}<div class="detail-footer">${U.act('expression-reply',id,mine?'继续补充':'写一句回应','btn soft')}${U.act('invite-from-expression',id,'商量具体时间','btn secondary')}${U.act('commitment-from-expression',id,'写下我的下一步')}<span class="spacer"></span>${mine?U.act('expression-withdraw',id,'撤回','text-link danger'):''}</div>`,{eyebrow:mine?'SENT BY ME':'A MESSAGE FOR YOU',wide:true});
+    U.modal(x.type,`<div class="detail-meta">${U.avatar(x.sender,'small')}<small class="muted">${esc(U.person(x.sender))} · ${U.date(x.createdAt)} ${U.time(x.createdAt)}</small>${U.badge(x.status==='OPEN'?'待回应':'已回应',x.status==='OPEN'?'peach':'green')}</div>${x.body?`<p class="modal-copy">${esc(x.body)}</p>`:''}<div class="detail-meta mt-16">${x.window?U.badge(x.window,'gray','clock'):''}${x.mode?U.badge(x.mode,'purple'):''}</div><p class="quiet-note">回应状态只表示是否回应，不代表事情已经解决。</p>${U.notificationSettingHTML('EXPRESSION',id)}${x.replies.length?`<hr class="divider"><div class="reply-list">${x.replies.map(r=>`<div class="reply-item">${U.avatar(r.author,'small')}<div><small class="muted">${esc(U.person(r.author))} · ${U.date(r.at)} ${U.time(r.at)}</small><p class="modal-copy">${esc(r.body)}</p></div></div>`).join('')}</div>`:''}${!mine?`<hr class="divider"><p class="detail-label">轻轻回应</p><div class="filter-chips">${['看到了，晚点找你','现在方便','想换个时间'].map(label=>`<button class="filter-chip" data-action="expression-quick-reply" data-id="${id}" data-value="${esc(label)}">${esc(label)}</button>`).join('')}</div>`:''}<div class="detail-footer">${U.act('expression-reply',id,mine?'继续补充':'写一句回应','btn soft')}${U.act('invite-from-expression',id,'商量具体时间','btn secondary')}${U.act('commitment-from-expression',id,'写下我的下一步')}<span class="spacer"></span>${mine?U.act('expression-withdraw',id,'撤回','text-link danger'):''}</div>`,{eyebrow:mine?'SENT BY ME':'A MESSAGE FOR YOU',wide:true});
   };
-  U.addReply=(x,body)=>{x.replies.push({author:'me',body,at:new Date().toISOString()});if(x.sender!=='me')x.status='RESPONDED';U.notify('expression',x.id,x.sender==='me'?'对方为表达追加了补充':'对方回应了你的表达',state.partner.username);save();U.close();U.render();U.toast(x.sender==='me'?'已追加补充':'回应已保存');};
+  U.expressionReplyForm=(id,body='')=>{
+    const x=U.find('expressions',id);if(!x||!U.shared(x)||x.status==='WITHDRAWN')return;
+    const mine=x.sender==='me';
+    U.form(mine?'继续补充':'写一句回应',U.field('body',mine?'想补充的话':'你的回应','textarea',body,'一句话也可以。','required maxlength="1000"')+U.followUpNotificationFields('EXPRESSION',id),(v,form)=>{
+      if(!v.body)return '请写一句话。';
+      const error=U.submitNotified(form,v,{action:'expression-reply',resourceType:'EXPRESSION',id,followUp:true,message:mine?'对方为表达追加了补充':'对方回应了你的表达'},()=>{
+        const current=U.find('expressions',id),now=new Date().toISOString();
+        current.replies.push({id:U.uid('reply'),author:'me',body:v.body,at:now});
+        if(current.sender!=='me')current.status='RESPONDED';current.version+=1;current.updatedAt=now;
+        return {type:'EXPRESSION',id};
+      });if(error)return error;U.toast(mine?'已追加补充':'回应已保存');
+    },{draft:body?'':`reply-${id}`,label:mine?'保存补充':'发送回应',eyebrow:'TAKE YOUR TIME'});
+  };
   U.actions['expression-new']=U.expressionForm;U.actions['expression-view']=({id})=>U.expressionDetail(id);
-  U.actions['expression-quick-reply']=({id,value})=>{const x=U.find('expressions',id);if(x&&x.sender!=='me'&&x.status!=='WITHDRAWN'&&U.shared(x))U.addReply(x,value);};
-  U.actions['expression-reply']=({id})=>{const x=U.find('expressions',id);if(!x||!U.shared(x)||x.status==='WITHDRAWN')return;U.form(x.sender==='me'?'继续补充':'写一句回应',U.field('body',x.sender==='me'?'想补充的话':'你的回应','textarea','','一句话也可以。','required maxlength="1000"'),v=>{if(!v.body)return '请写一句话。';U.addReply(x,v.body);},{draft:`reply-${id}`,label:x.sender==='me'?'保存补充':'发送回应',eyebrow:'TAKE YOUR TIME'});};
-  U.actions['expression-withdraw']=({id})=>{const x=U.find('expressions',id);if(!x||x.sender!=='me')return;U.confirm('撤回这条表达？','撤回后保留「已撤回」占位，正文与所有回应不再显示。','撤回表达',()=>{x.status='WITHDRAWN';x.body='';x.replies=[];x.type='已撤回';x.mode='';x.window='';save();U.close();U.render();U.toast('表达已撤回');});};
+  U.actions['expression-quick-reply']=({id,value})=>{const x=U.find('expressions',id);if(x&&x.sender!=='me')U.expressionReplyForm(id,value);};
+  U.actions['expression-reply']=({id})=>U.expressionReplyForm(id);
+  U.actions['expression-withdraw']=({id})=>{
+    const x=U.find('expressions',id);if(!x||x.sender!=='me'||!U.shared(x)||x.status==='WITHDRAWN')return;
+    const version=x.version;
+    U.confirm('撤回这条表达？','撤回后保留「已撤回」占位，正文与所有回应不再显示，旧通知与未完成邮件失效。','撤回表达',()=>{
+      const current=U.find('expressions',id);if(!current||!U.shared(current)||current.version!==version)return U.toast('表达已变化，请重新查看后撤回',true);
+      current.status='WITHDRAWN';current.body='';current.replies=[];current.type='已撤回';current.mode='';current.window='';current.version+=1;current.updatedAt=new Date().toISOString();
+      U.clearNotificationSettings('EXPRESSION',id);U.invalidateBusinessNotifications('EXPRESSION',id);
+      save();U.close();U.render();U.toast('表达已撤回');
+    });
+  };
   U.actions['invite-from-expression']=({id})=>U.inviteForm({expressionId:id});
   U.actions['commitment-from-expression']=({id})=>U.commitmentForm(null,{sourceType:'expression',sourceId:id});
 

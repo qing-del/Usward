@@ -10,7 +10,8 @@ function preview(saved) {
   const storage = new Map(saved ? [['usward-preview-v1', saved]] : []);
   const timeForm = {dataset:{},
     elements: Object.fromEntries(['allDay','start','end','startDate','lastDate'].map(name => [name,{checked:false,addEventListener(){}}])),
-    querySelector: () => ({hidden:false})
+    querySelector: selector => selector==='.notification-override'?null:{hidden:false,insertAdjacentHTML(){}},
+    querySelectorAll: () => []
   };
   const context = vm.createContext({
     Date:Clock, Intl, console, crypto:require('node:crypto').webcrypto,
@@ -28,7 +29,12 @@ function preview(saved) {
   U.modal = (title,html) => {env.modal={title,html};};
   U.render = () => {env.renders=(env.renders||0)+1;U.refreshReminders();};
   U.confirm = (title,copy,label,confirm) => {env.confirm=confirm;};
-  U.form = (title,html,submit,options) => {env.form={title,html,submit,options};return timeForm;};
+  U.form = (title,html,submit,options) => {
+    timeForm.dataset={operationKey:U.operationKey()};
+    const metadata=html.match(/data-notification-context data-connection="([^"]*)" data-resource-version="([^"]*)"/);
+    if(metadata)Object.assign(timeForm.dataset,{notificationConnection:metadata[1],notificationResourceVersion:metadata[2]});
+    env.form={title,html,submit,options,node:timeForm};return timeForm;
+  };
   env.submit = values => {
     const result=env.form.submit(values,timeForm);
     if(typeof result!=='string' && result!==false){U.save();U.render();}

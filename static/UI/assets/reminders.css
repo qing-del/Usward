@@ -21,3 +21,5 @@
 .reminder-list-item p{font-size:10px;color:var(--muted);margin:6px 0;line-height:1.8}
 .reminder-list-item .badge{margin-left:0;margin-bottom:9px;white-space:normal}
 @media(max-width:600px){.reminder-fields{padding:14px}.email-value{max-width:115px}.mail-delivery-link{margin-left:0;max-width:100%}.mail-message-preview{padding:17px}}
+
+.reminder-list-item strong{display:block;overflow-wrap:anywhere}.reminder-list-item .flex{flex-wrap:wrap;gap:9px}.notification-text{min-width:0;overflow-wrap:anywhere}.notification-row>svg,.notification-row>.icon-box{flex-shrink:0}

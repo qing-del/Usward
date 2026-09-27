@@ -12,6 +12,7 @@
     MAIL_DISABLED:'触发时部署尚未启用邮件提醒。站内提醒已保留。',
     MAIL_CONFIG_INCOMPLETE:'邮件配置不完整。站内提醒已保留。',
     SMTP_TEMPORARY_FAILURE:'邮件暂时未发出，将稍后再次尝试。',
+    SMTP_RETRY_EXHAUSTED:'邮件多次尝试后仍未发出，已停止自动重试。站内提醒已保留。',
     SMTP_PERMANENT_FAILURE:'邮件发送失败，请检查收件地址或联系部署维护者。站内提醒仍可查看。'
   };
   const unfinished = delivery => ['QUEUED','PROCESSING'].includes(delivery.status);
@@ -114,6 +115,7 @@
   };
   U.validateReminderValues = values => {
     if (!values.reminder) return null;
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(values.reminder)) return '请选择有效的提醒时间。';
     try {if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder)))) return '请选择有效的提醒时间。';}
     catch (_) {return '请选择有效的提醒时间。';}
     const mode = values.deliveryMode || 'IN_APP';
@@ -182,7 +184,7 @@
           const config = U.state.previewMail;
           const email = person(r.recipient)?.notificationEmail;
           const failureCode = !U.validNotificationEmail(email)?'RECIPIENT_EMAIL_MISSING':!config.enabled?'MAIL_DISABLED':!config.configured?'MAIL_CONFIG_INCOMPLETE':null;
-          U.state.mailDeliveries.push({id:U.uid('delivery'),notificationId:notification.id,reminderId:r.id,reminderRevision:r.revision,recipient:r.recipient,recipientEmail:email||null,status:failureCode?'FAILED':'QUEUED',failureCode,sentAt:null,nextAttemptAt:null});
+          U.state.mailDeliveries.push({id:U.uid('delivery'),notificationId:notification.id,reminderId:r.id,reminderRevision:r.revision,recipient:r.recipient,recipientEmail:email||null,status:failureCode?'FAILED':'QUEUED',failureCode,sentAt:null,nextAttemptAt:null,attemptCount:0});
         }
       }
       r.status = 'FIRED';syncLegacy(r);changed=true;
@@ -214,12 +216,15 @@
     U.state.mailDeliveries.forEach(d => {
       if (!unfinished(d) || (d.nextAttemptAt && Date.parse(d.nextAttemptAt)>Date.now())) return;
       if (!U.state.previewMail.enabled || !U.state.previewMail.configured) {d.status='FAILED';d.failureCode=U.state.previewMail.enabled?'MAIL_CONFIG_INCOMPLETE':'MAIL_DISABLED';}
-      else if (d.status==='QUEUED') d.status='PROCESSING';
+      else if (d.status==='QUEUED') {d.status='PROCESSING';d.attemptCount=(d.attemptCount||0)+1;d.nextAttemptAt=null;d.failureCode=null;}
       else {
         const result = U.state.previewMail.result || 'SENT';
         d.status=result;
         if (result==='SENT') {d.sentAt=new Date().toISOString();d.failureCode=null;}
-        else if (result==='QUEUED') {d.nextAttemptAt=new Date(Date.now()+60000).toISOString();d.failureCode='SMTP_TEMPORARY_FAILURE';}
+        else if (result==='QUEUED') {
+          if(d.attemptCount>=5){d.status='FAILED';d.failureCode='SMTP_RETRY_EXHAUSTED';}
+          else {d.nextAttemptAt=new Date(Date.now()+[1,5,15,60][d.attemptCount-1]*60000).toISOString();d.failureCode=null;}
+        }
         else d.failureCode='SMTP_PERMANENT_FAILURE';
       }
       changed=true;

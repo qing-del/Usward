@@ -1,7 +1,9 @@
 (() => {
   const {esc,icon}=U;
   const zones=[['Asia/Shanghai','中国标准时间 · UTC+8'],['Asia/Taipei','台北 · UTC+8'],['Asia/Singapore','新加坡 · UTC+8'],['Asia/Tokyo','东京 · UTC+9'],['Europe/London','伦敦'],['America/New_York','纽约'],['UTC','世界协调时间 · UTC']];
-  const activeToken=()=>{const t=U.state.inviteToken;if(t&&t.status==='ACTIVE'&&t.expiresAt<=Date.now()){t.status='EXPIRED';U.save();}return t&&t.status==='ACTIVE'?t:null;};
+  let pendingTokenId=null,pendingDemo=false;
+  const demoCode=()=>U.state.partner.username==='linan'?'US-DEMO-AN':'US-DEMO-CHEN';
+  const activeToken=()=>{let changed=false;U.state.connectionInvites.forEach(t=>{if(t.status==='ACTIVE'&&t.expiresAt<=Date.now()){t.status='EXPIRED';changed=true;}});if(changed)U.save();return U.state.connectionInvites.find(t=>t.owner===U.state.user.username&&t.status==='ACTIVE')||null;};
   U.pages.me=()=>{
     const s=U.state,connected=U.connected();const open=s.commitments.filter(c=>c.owner==='me'&&U.commitmentVisible(c)&&c.status==='OPEN').length;
     const archived=s.memories.filter(m=>m.owner==='me'&&U.memoryVisible(m)&&m.archived).length;const token=activeToken();
@@ -20,28 +22,29 @@
   U.actions['availability-toggle']=()=>{if(!U.connected())return;U.state.user.shareAvailability=!U.state.user.shareAvailability;U.save();U.render();U.toast(U.state.user.shareAvailability?'已开启时间与状态共享，私人备注仍不可见':'已停止展示个人时间块');};
   U.actions['connection-generate']=()=>{
     if(U.connected())return;let t=activeToken();
-    if(!t){const bytes=crypto.getRandomValues(new Uint8Array(8));const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';const code=Array.from(bytes,b=>chars[b%chars.length]).join('');t=U.state.inviteToken={code:'US-'+code.slice(0,4)+'-'+code.slice(4),status:'ACTIVE',expiresAt:Date.now()+24*60*60*1000};U.save();U.render();}
+    if(!t){const bytes=crypto.getRandomValues(new Uint8Array(8));const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';const code=Array.from(bytes,b=>chars[b%chars.length]).join('');t={id:U.uid('pair-invite'),owner:U.state.user.username,code:'US-'+code.slice(0,4)+'-'+code.slice(4),status:'ACTIVE',expiresAt:Date.now()+24*60*60*1000};U.state.connectionInvites.push(t);U.save();U.render();}
     U.modal('给一个重要的人，发出邀请',`<p class="modal-copy">把这个一次性口令手动交给对方。对方登录后，先看到邀请者，再决定是否接受。</p><div class="field mt-24"><label for="connection-code">连接邀请口令</label><input id="connection-code" value="${esc(t.code)}" readonly autocomplete="off"></div><div class="flex between mt-16"><p class="quiet-note">有效至 ${U.date(new Date(t.expiresAt).toISOString())} ${U.time(new Date(t.expiresAt).toISOString())}</p><button class="btn soft small" data-action="connection-copy">复制口令</button></div><div class="inline-note mt-24">${icon('lock',16)}接受邀请不会分享任何历史内容。此预览口令只用于本地演示，不是真实连接凭证。</div><div class="detail-footer"><button class="text-link danger" data-action="connection-revoke">撤销这次邀请</button><span class="spacer"></span><button class="btn secondary" data-action="close">收好邀请</button></div>`,{eyebrow:'AN INVITATION TO OUR EVERYDAY'});
   };
   U.actions['connection-copy']=async()=>{const token=activeToken();if(!token)return U.toast('邀请已过期，请重新生成',true);try{await navigator.clipboard.writeText(token.code);U.toast('口令已复制，请手动交给对方');}catch(_){const input=document.querySelector('#connection-code');input?.select();U.toast('请选中口令后复制');}};
-  U.actions['connection-revoke']=()=>{if(U.state.inviteToken)U.state.inviteToken.status='REVOKED';U.save();U.close();U.render();U.toast('邀请已撤销，原口令不能使用');};
+  U.actions['connection-revoke']=()=>{const t=activeToken();if(t)t.status='REVOKED';U.save();U.close();U.render();U.toast('邀请已撤销，原口令不能使用');};
   U.actions['connection-receive']=()=>{
-    if(U.connected())return;U.form('看看这份连接邀请',`${U.field('code','对方给你的邀请口令','text','','例如：US-DEMO-CHEN','required autocomplete="off"')}<div class="inline-note">${icon('info',16)}预览示例口令：US-DEMO-CHEN。它模拟 ${esc(U.state.partner.name)} 发来的邀请。自己生成的邀请不能由自己接受。</div>`,v=>{
-      const code=v.code.toUpperCase();const token=U.state.inviteToken;
-      if(token&&code===token.code){if(token.status!=='ACTIVE')return '这份邀请已撤销或已使用。';if(token.expiresAt<=Date.now())return '这份邀请已过期。';return '不能接受自己生成的邀请，请把口令交给对方。';}
-      if(code!=='US-DEMO-CHEN')return '未找到有效邀请，请检查口令。';if(U.state.acceptedDemoInvite)return '这份示例邀请已经使用，请重新载入单人示例。';
+    if(U.connected())return;U.form('看看这份连接邀请',`${U.field('code','对方给你的邀请口令','text','','例如：'+demoCode(),'required autocomplete="off"')}<div class="inline-note">${icon('info',16)}也可使用预览示例口令 ${demoCode()}，模拟 ${esc(U.state.partner.name)} 发来的邀请。自己生成的邀请不能由自己接受。</div>`,v=>{
+      const code=v.code.toUpperCase();const token=U.state.connectionInvites.find(t=>t.code===code);
+      if(token){if(token.status!=='ACTIVE')return '这份邀请已撤销或已使用。';if(token.expiresAt<=Date.now())return '这份邀请已过期。';if(token.owner===U.state.user.username)return '不能接受自己生成的邀请，请把口令交给对方。';}
+      else {if(code!==demoCode())return '未找到有效邀请，请检查口令。';if(U.state.acceptedDemoInvite)return '这份示例邀请已经使用，请重新载入单人示例。';}
+      pendingTokenId=token?.id||null;pendingDemo=!token;
       U.modal('接受这份连接邀请？',`<div class="connection-inviter">${U.avatar('partner','large')}<h3>${esc(U.state.partner.name)}</h3><p class="quiet-note">邀请你建立一个双人连接</p></div><div class="inline-note mt-24">${icon('lock',16)}你们各自的历史记录仍然私密。连接后也只有主动分享的内容对另一方可见。</div><div class="form-actions"><button class="btn secondary" data-action="close">暂不接受</button><button class="btn primary" data-action="connection-accept">接受连接</button></div>`,{eyebrow:'CHOOSE TO CONNECT'});return false;
     },{label:'查看邀请者',eyebrow:'SOMEONE INVITED YOU'});
   };
   U.actions['connection-accept']=()=>{
-    if(U.connected())return U.toast('你已经有一个有效连接',true);U.state.connected=true;U.state.connectionId=U.uid('connection');U.state.acceptedDemoInvite=true;U.state.user.shareAvailability=false;U.state.partner.shareAvailability=false;U.state.availability=[];if(U.state.inviteToken)U.state.inviteToken.status='CONSUMED';U.save();U.close();U.render();U.toast('连接已建立，历史内容仍然私密');
+    if(U.connected())return U.toast('你已经有一个有效连接',true);const token=pendingTokenId&&U.state.connectionInvites.find(t=>t.id===pendingTokenId);if(!pendingDemo&&(!token||token.owner===U.state.user.username||token.status!=='ACTIVE'||token.expiresAt<=Date.now()))return U.toast('这份邀请已不可用，请重新查看',true);U.state.connected=true;U.state.connectionId=U.uid('connection');if(pendingDemo)U.state.acceptedDemoInvite=true;U.state.user.shareAvailability=false;U.state.partner.shareAvailability=false;U.state.availability=[];U.state.connectionInvites.forEach(t=>{if(t.status==='ACTIVE')t.status=t===token?'CONSUMED':'REVOKED';});pendingTokenId=null;pendingDemo=false;U.save();U.close();U.render();U.toast('连接已建立，历史内容仍然私密');
   };
   U.actions['connection-end']=()=>{
     if(!U.connected())return;U.modal('解除连接前，先看看这些变化',`<p class="modal-copy">任一方都可以解除连接，无需对方批准。</p><ul class="connection-impact"><li><strong>立即停止共同访问</strong><p>共享访问、忙闲展示、待处理邀约和跨用户提醒立即停止。</p></li><li><strong>自己的记录会保留</strong><p>自己写的卡片与承诺恢复为私密，清除分享关系。</p></li><li><strong>旧共同内容不再提供访问</strong><p>表达与回应、邀约、共同安排封存。共同安排不会自动复制到个人日历。</p></li><li><strong>新连接从新的选择开始</strong><p>新的连接不会继承旧连接内容。</p></li></ul><div class="inline-note peach">${icon('info',16)}解除不是删除。正式部署的数据库备份可能仍保留历史内容。</div><div class="form-actions"><button class="btn secondary" data-action="close">保留连接</button><button class="btn danger" data-action="connection-end-confirm">我已了解，继续</button></div>`,{eyebrow:'YOUR SPACE, YOUR CHOICE'});
   };
   U.actions['connection-end-confirm']=()=>U.confirm('确认解除与 '+U.state.partner.name+' 的连接？','解除会立即生效。个人记录仍保留，旧共同空间将不可访问。','确认解除连接',()=>{
-    const s=U.state,old=s.connectionId;s.connected=false;s.connectionId=null;s.user.shareAvailability=false;s.partner.shareAvailability=false;s.availability=[];s.inviteToken=null;
-    s.memories.filter(m=>m.owner==='me'&&m.connectionId===old).forEach(m=>{m.shared=false;m.connectionId=null;m.comments=[];});s.commitments.filter(c=>c.owner==='me'&&c.connectionId===old).forEach(c=>{c.shared=false;c.connectionId=null;});
+    const s=U.state,old=s.connectionId;s.connected=false;s.connectionId=null;s.user.shareAvailability=false;s.partner.shareAvailability=false;s.availability=[];s.inviteToken=null;s.connectionInvites.forEach(t=>{if(t.status==='ACTIVE')t.status='REVOKED';});s.events.filter(e=>e.kind==='PERSONAL').forEach(e=>e.shareTitle=false);
+    s.memories.filter(m=>m.connectionId===old).forEach(m=>{m.shared=false;m.connectionId=null;m.comments=[];m.privateReminders={};m.firedPrivateReminders={};});s.commitments.filter(c=>c.connectionId===old).forEach(c=>{c.shared=false;c.connectionId=null;});
     s.invitations.filter(i=>i.connectionId===old&&i.status==='PENDING').forEach(i=>i.status='WITHDRAWN');s.events.filter(e=>e.connectionId===old).forEach(e=>{e.reminder='';e.pendingChange=null;e.sealed=true;});U.save();U.close();U.view={};U.render();U.toast('已解除连接，个人记录仍保留');
   },true);
 })();

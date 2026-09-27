@@ -4,7 +4,8 @@
   const dayEvents=day=>U.state.events.filter(e=>U.eventVisible(e)&&(e.allDay?e.startDate<=day&&e.endDate>day:U.day(e.start)<=day&&U.day(e.end)>=day)).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));
   function mergedAvailability(day) {
     if(!U.connected()||!U.state.partner.shareAvailability)return [];
-    const items=U.state.availability.filter(a=>U.day(a.start)<=day&&U.day(a.end)>=day);
+    const personal=U.state.events.filter(e=>e.kind==='PERSONAL'&&e.owner==='partner'&&!e.deleted&&e.status==='CONFIRMED').map(e=>({id:e.id,start:e.start,end:e.end,status:e.availability}));
+    const items=[...U.state.availability.filter(a=>(a.owner||'partner')==='partner'),...personal].filter(a=>U.day(a.start)<=day&&U.day(a.end)>=day);
     const points=[...new Set(items.flatMap(a=>[Date.parse(a.start),Date.parse(a.end)]))].sort((a,b)=>a-b);
     const priority={BUSY:3,NEGOTIABLE:2,FREE:1};const merged=[];
     points.slice(0,-1).forEach((p,n)=>{const end=points[n+1];const status=items.filter(a=>Date.parse(a.start)<end&&Date.parse(a.end)>p).sort((a,b)=>priority[b.status]-priority[a.status])[0]?.status;if(!status)return;const last=merged.at(-1);if(last&&last.status===status&&Date.parse(last.end)===p)last.end=new Date(end).toISOString();else merged.push({id:`availability-${n}`,start:new Date(p).toISOString(),end:new Date(end).toISOString(),status,title:availabilityLabels[status],kind:'AVAILABILITY'});});

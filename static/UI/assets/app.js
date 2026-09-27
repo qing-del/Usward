@@ -45,7 +45,7 @@
     const day = seedDay;
     return {
       schema:1, demoDay:day, connected, connectionId:connected ? 'connection-demo-1' : null,
-      user:{name:'林安',timezone:'Asia/Shanghai',avatar:'安',shareAvailability:false},partner:{name:'陈屿',avatar:'屿',shareAvailability:true},
+      user:{username:'linan',name:'林安',timezone:'Asia/Shanghai',avatar:'安',shareAvailability:false},partner:{username:'chenyu',name:'陈屿',timezone:'Asia/Shanghai',avatar:'屿',shareAvailability:true},
       memories:[
         {id:'m1',owner:'me',title:'不赶时间的早餐',body:'比起精心安排的约会，更喜欢一起慢慢吃一顿早餐。哪怕只是楼下的豆浆和包子，也会觉得这一天很好。',category:'喜好兴趣',tags:['早餐','小日常'],source:'EXPLICIT',sourceDate:addDay(day,-3),nextAction:'下次周末，留一点时间一起吃早餐。',reminder:'',shared:false,connectionId:null,archived:false,color:'sand',comments:[]},
         {id:'m2',owner:'me',title:'忙的时候，先发一条消息',body:'他说，忙的时候不需要一直聊天，但如果能提前说一句“今天会比较忙”，就不用互相猜测。',category:'相处偏好',tags:['沟通','安心感'],source:'EXPLICIT',sourceDate:addDay(day,-5),nextAction:'忙之前，记得主动告诉他。',reminder:'',shared:true,connectionId:'connection-demo-1',archived:false,color:'sage',comments:[]},
@@ -75,13 +75,16 @@
         {id:'c4',owner:'partner',title:'整理上次旅行的路线',body:'周末一起看看还想去哪儿。',nextAction:'',due:addDay(day,3),status:'OPEN',shared:true,reminder:'',result:'',connectionId:'connection-demo-1'}
       ],
       notifications:[{id:'n1',kind:'expression',resourceId:'x1',message:'收到一条新的表达',read:false,at:stamp(day,'09:20')},{id:'n2',kind:'invitation',resourceId:'i1',message:'收到一份新邀约',read:false,at:stamp(day,'09:00')},{id:'n3',kind:'memory',resourceId:'m4',message:'你设置的私人提醒到了',read:true,at:stamp(addDay(day,-1),'16:00')}],
-      inviteToken:null,drafts:{},signedIn:true
+      inviteToken:null,connectionInvites:[],drafts:{},signedIn:true
     };
   }
   let storageAvailable = true;
   let state;
   try {state = JSON.parse(localStorage.getItem(KEY));} catch (_) {storageAvailable = false;}
   if (!state || state.schema !== 1) state = seed();
+  state.user.username ||= 'linan';state.partner.username ||= state.user.username==='linan'?'chenyu':'linan';state.partner.timezone ||= 'Asia/Shanghai';
+  state.availability.forEach(a=>a.owner ||= 'partner');state.notifications.forEach(n=>n.recipient ||= state.user.username);
+  state.connectionInvites ||= [];if(state.inviteToken){state.inviteToken.owner ||= state.user.username;if(!state.connectionInvites.some(t=>t.code===state.inviteToken.code))state.connectionInvites.push(state.inviteToken);state.inviteToken=null;}
   function save() {try {localStorage.setItem(KEY, JSON.stringify(state));} catch (_) {storageAvailable = false;}}
   save();
   const U = window.U = {
@@ -119,17 +122,28 @@
     },
     formatRange:e => e.allDay ? `${U.date(e.startDate)} · 全天` : `${U.date(e.start)} ${U.time(e.start)}–${U.day(e.start) !== U.day(e.end) ? U.date(e.end)+' ' : ''}${U.time(e.end)}`,
     find:(collection,id) => state[collection].find(item => item.id === id),
-    notify:(kind,resourceId,message) => state.notifications.unshift({id:U.uid('n'),kind,resourceId,message,read:false,at:new Date().toISOString()}),
+    notify:(kind,resourceId,message,recipient=state.user.username) => state.notifications.unshift({id:U.uid('n'),kind,resourceId,message,recipient,connectionId:recipient!==state.user.username?state.connectionId:null,read:false,at:new Date().toISOString()}),
     act:(action,id='',label='查看',cls='text-link') => `<button class="${cls}" data-action="${action}" ${id ? `data-id="${esc(id)}"` : ''}>${label}</button>`,
     footer:() => `<footer class="page-footer">${icon('leaf',12)}记住小事，也为彼此留一点时间。</footer>`
   };
   const nav = [{key:'today',label:'今天',icon:'sun',file:'index.html'},{key:'calendar',label:'日历',icon:'calendar',file:'calendar.html'},{key:'expressions',label:'表达',icon:'heart',file:'expressions.html'},{key:'memories',label:'记忆',icon:'memory',file:'memories.html'},{key:'me',label:'我的',icon:'user',file:'me.html'}];
   U.nav = nav;
+  U.switchAccount=username=>{
+    if(username===state.user.username)return;
+    const old=state.user.username;const flip=who=>who==='me'?'partner':who==='partner'?'me':who;
+    state.events.filter(e=>e.kind==='SHARED').forEach(e=>{e.privateReminders ||= {};e.privateReminders[old]=e.reminder||'';e.reminder=e.privateReminders[username]||'';e.firedReminders ||= {};e.firedReminders[old]=e.firedReminder||'';e.firedReminder=e.firedReminders[username]||'';});
+    state.memories.forEach(m=>{m.owner=flip(m.owner);m.comments.forEach(c=>c.author=flip(c.author));});state.commitments.forEach(c=>c.owner=flip(c.owner));state.events.forEach(e=>{if(e.owner)e.owner=flip(e.owner);});state.expressions.forEach(x=>{x.sender=flip(x.sender);x.replies.forEach(r=>r.author=flip(r.author));});state.invitations.forEach(i=>i.sender=flip(i.sender));state.availability.forEach(a=>a.owner=flip(a.owner));
+    if(state.inviteToken&&!state.inviteToken.owner)state.inviteToken.owner=old;
+    state.draftsByUser ||= {};state.draftsByUser[old]=state.drafts;state.drafts=state.draftsByUser[username]||{};
+    [state.user,state.partner]=[state.partner,state.user];U.view={};save();
+  };
   U.unread = () => state.notifications.filter(n => !n.read && U.notificationVisible(n)).length;
   U.notificationVisible = n => {
+    if(n.recipient && n.recipient!==state.user.username)return false;
+    if(n.connectionId && n.connectionId!==state.connectionId)return false;
     if (n.kind === 'expression') {const x=U.find('expressions',n.resourceId);return x && U.expressionVisible(x) && x.status !== 'WITHDRAWN';}
     if (n.kind === 'invitation') {const i=U.find('invitations',n.resourceId);return i && U.shared(i);}
-    if (n.kind === 'memory') {const m=U.find('memories',n.resourceId);return m && U.memoryVisible(m);}
+    if (n.kind === 'memory') {const m=U.find('memories',n.resourceId);return m && U.memoryVisible(m) && (!n.connectionId || (m.shared&&U.shared(m)));}
     if (n.kind === 'event') {const e=U.find('events',n.resourceId);return e && U.eventVisible(e) && e.status !== 'CANCELLED';}
     if (n.kind === 'commitment') {const c=U.find('commitments',n.resourceId);return c && U.commitmentVisible(c);}
     return n.kind === 'system';
@@ -148,8 +162,9 @@
     let changed=false;
     [['memories','memory',U.memoryVisible],['events','event',U.eventVisible],['commitments','commitment',c=>c.owner==='me' && U.commitmentVisible(c)]].forEach(([collection,kind,visible]) => {
       state[collection].forEach(r => {
-        if (r.reminder && visible(r) && r.status !== 'CANCELLED' && r.firedReminder !== r.reminder && Date.parse(r.reminder) <= Date.now()) {
-          U.notify(kind,r.id,'你设置的私人提醒到了');r.firedReminder=r.reminder;changed=true;
+        const sharedMemory=kind==='memory'&&r.owner!=='me';const reminder=sharedMemory?r.privateReminders?.[state.user.username]:r.reminder;const fired=sharedMemory?r.firedPrivateReminders?.[state.user.username]:r.firedReminder;
+        if (reminder && visible(r) && r.status !== 'CANCELLED' && fired !== reminder && Date.parse(reminder) <= Date.now()) {
+          U.notify(kind,r.id,'你设置的私人提醒到了');if(sharedMemory){r.firedPrivateReminders ||= {};r.firedPrivateReminders[state.user.username]=reminder;}else r.firedReminder=reminder;changed=true;
         }
       });
     });
@@ -212,7 +227,7 @@
   U.connectionRequired=()=>{U.modal('先邀请一个重要的人',`<div class="inline-note">${icon('link',19)}表达与邀约需要双方主动连接。连接后，历史卡片和承诺仍只对你自己可见。</div><p class="modal-copy mt-16">现在也可以先记一张卡片，或给自己留一段时间。</p><div class="form-actions"><button class="btn secondary" data-action="memory-new">先记下来</button><a class="btn primary" href="me.html">去邀请连接 ${icon('arrow',15)}</a></div>`);};
   U.actions.close=U.close;
   U.actions.preview=()=>U.modal('交互预览',`<p class="modal-copy">这是一份使用示例数据的 HTML 预览。操作只保存在当前浏览器，没有连接后端，也不会向另一位用户发送真实通知。</p><div class="inline-note mt-16">${icon('info',17)}${storageAvailable?'本地修改会在刷新后保留。':'当前浏览器无法保存数据，修改仅在本次打开期间保留。'} 演示双方操作请使用已有的收到内容。</div><div class="list-row"><div><h3>双人连接状态</h3><p>包含收到的表达、邀约和共享内容。</p></div><button class="btn soft small" data-action="reset-connected">载入示例</button></div><div class="list-row"><div><h3>单人使用状态</h3><p>个人记录、日历和承诺仍可使用。</p></div><button class="btn soft small" data-action="reset-solo">载入示例</button></div><p class="quiet-note mt-16">载入示例会替换当前浏览器的预览修改。</p>`);
-  U.reset=connected=>U.confirm('重新载入示例？','这会清除你在这份预览中新增或修改的内容，替换为对应状态的示例数据。','重新载入',()=>{state=seed(connected);if(!connected){state.memories.filter(m=>m.owner==='me').forEach(m=>{m.shared=false;m.connectionId=null;});state.commitments.filter(c=>c.owner==='me').forEach(c=>{c.shared=false;c.connectionId=null;});}U.state=state;save();U.close();U.view={};U.render();U.toast(connected?'已载入双人示例':'已载入单人示例');});
+  U.reset=connected=>U.confirm('重新载入示例？','这会清除你在这份预览中新增或修改的内容，替换为对应状态的示例数据。','重新载入',()=>{state=seed(connected);if(!connected){state.memories.forEach(m=>{m.shared=false;m.connectionId=null;});state.commitments.forEach(c=>{c.shared=false;c.connectionId=null;});}U.state=state;save();U.close();U.view={};U.render();U.toast(connected?'已载入双人示例':'已载入单人示例');});
   U.actions['reset-connected']=()=>U.reset(true);U.actions['reset-solo']=()=>U.reset(false);
 
   /* Memory cards: private by default; whole-card sharing requires preview. */
@@ -228,19 +243,24 @@
   U.memoryDetail=id=>{
     const m=U.find('memories',id);if(!m||!U.memoryVisible(m))return U.toast('这张卡片已不可访问',true);
     const mine=m.owner==='me';
-    U.modal(m.title||'一件值得记住的事',`<div class="detail-meta">${U.badge(m.category,'green')}${U.badge(U.sources[m.source],m.source==='INTERPRETATION'?'peach':'gray')}${U.badge(m.shared&&U.shared(m)?mine?'已分享':'对方分享':'仅自己','gray',m.shared&&U.shared(m)?'link':'lock')}</div><p class="modal-copy">${esc(m.body)}</p>${m.tags.length?`<div class="filter-chips mt-16">${m.tags.map(t=>U.badge('# '+t,'gray')).join('')}</div>`:''}${m.sourceDate?`<p class="detail-label">来源日期</p><p class="modal-copy">${U.date(m.sourceDate)}</p>`:''}${m.nextAction?`<p class="detail-label">${mine?'我的下次行动':'作者的下次行动'}</p><p class="modal-copy">${esc(m.nextAction)}</p>`:''}${mine&&m.reminder?`<div class="inline-note mt-16">${icon('bell',16)}私人提醒 · ${U.date(m.reminder)} ${U.time(m.reminder)}</div>`:''}${m.shared&&U.shared(m)?`<hr class="divider"><h3>补充 / 更正</h3>${m.comments.length?m.comments.map(c=>`<div class="list-row"><div><small class="muted">${esc(U.person(c.author))}</small><p class="modal-copy">${esc(c.body)}</p></div></div>`).join(''):'<p class="quiet-note mt-8">这份记录可以慢慢补充。原文仍由作者决定如何修订。</p>'}${!mine?`<button class="btn soft small mt-16" data-action="memory-comment" data-id="${m.id}">${icon('edit',14)}补充 / 更正</button>`:''}`:''}<div class="detail-footer">${mine?`${U.act('memory-edit',m.id,icon('edit',14)+'编辑','btn soft')}${U.act(m.shared&&U.shared(m)?'memory-unshare':'memory-share',m.id,m.shared&&U.shared(m)?'撤销分享':'分享给对方','btn secondary')}<span class="spacer"></span>${U.act(m.archived?'memory-restore':'memory-archive',m.id,m.archived?'恢复':'归档')}${U.act('memory-delete',m.id,'删除','text-link danger')}`:`<p class="quiet-note">${esc(state.partner.name)} 的记录 · 你可以补充，不能直接编辑。</p>`}</div>`,{eyebrow:mine?'MY MEMORY':'SHARED WITH YOU'});
+    const myReminder=mine?m.reminder:m.privateReminders?.[state.user.username];
+    U.modal(m.title||'一件值得记住的事',`<div class="detail-meta">${U.badge(m.category,'green')}${U.badge(U.sources[m.source],m.source==='INTERPRETATION'?'peach':'gray')}${U.badge(m.shared&&U.shared(m)?mine?'已分享':'对方分享':'仅自己','gray',m.shared&&U.shared(m)?'link':'lock')}</div><p class="modal-copy">${esc(m.body)}</p>${m.tags.length?`<div class="filter-chips mt-16">${m.tags.map(t=>U.badge('# '+t,'gray')).join('')}</div>`:''}${m.sourceDate?`<p class="detail-label">来源日期</p><p class="modal-copy">${U.date(m.sourceDate)}</p>`:''}${m.nextAction?`<p class="detail-label">${mine?'我的下次行动':'作者的下次行动'}</p><p class="modal-copy">${esc(m.nextAction)}</p>`:''}${myReminder?`<div class="inline-note mt-16">${icon('bell',16)}我的私人提醒 · ${U.date(myReminder)} ${U.time(myReminder)}</div>`:''}${m.shared&&U.shared(m)?`<hr class="divider"><h3>补充 / 更正</h3>${m.comments.length?m.comments.map(c=>`<div class="list-row"><div><small class="muted">${esc(U.person(c.author))}</small><p class="modal-copy">${esc(c.body)}</p></div></div>`).join(''):'<p class="quiet-note mt-8">这份记录可以慢慢补充。原文仍由作者决定如何修订。</p>'}${!mine?`<button class="btn soft small mt-16" data-action="memory-comment" data-id="${m.id}">${icon('edit',14)}补充 / 更正</button>`:''}`:''}<div class="detail-footer">${U.act('memory-reminder',m.id,icon('bell',14)+'我的提醒','btn soft')}${mine?`${U.act('memory-edit',m.id,icon('edit',14)+'编辑','btn soft')}${U.act(m.shared&&U.shared(m)?'memory-unshare':'memory-share',m.id,m.shared&&U.shared(m)?'撤销分享':'分享给对方','btn secondary')}<span class="spacer"></span>${U.act(m.archived?'memory-restore':'memory-archive',m.id,m.archived?'恢复':'归档')}${U.act('memory-delete',m.id,'删除','text-link danger')}`:`<p class="quiet-note">${esc(state.partner.name)} 的记录 · 你可以补充，不能直接编辑。</p>`}</div>`,{eyebrow:mine?'MY MEMORY':'SHARED WITH YOU'});
   };
   U.actions['memory-new']=()=>U.memoryForm();U.actions['memory-edit']=({id})=>U.memoryForm(id);U.actions['memory-view']=({id})=>U.memoryDetail(id);
+  U.actions['memory-reminder']=({id})=>{
+    const m=U.find('memories',id);if(!m||!U.memoryVisible(m))return;const mine=m.owner==='me';const current=mine?m.reminder:m.privateReminders?.[state.user.username];
+    U.form('只提醒我自己',`${U.field('reminder','私人提醒时间 <small>留空可取消</small>','datetime-local',current?U.local(current):'')}<div class="inline-note">${icon('lock',16)}这个提醒只有你自己可见；分享撤销后，对方卡片上的提醒会失效。</div>`,v=>{const value=U.fromLocal(v.reminder);if(mine)m.reminder=value;else {m.privateReminders ||= {};m.privateReminders[state.user.username]=value;}U.toast(value?'私人提醒已保存':'私人提醒已取消');},{label:'保存提醒',eyebrow:'ONLY FOR ME'});
+  };
   U.actions['memory-share']=({id})=>{
     const m=U.find('memories',id);if(!m||m.owner!=='me')return;if(!U.connected())return U.connectionRequired();
     U.modal('分享这张记忆',`<p class="quiet-note">${esc(state.partner.name)} 将看到整张当前卡片：</p><div class="card soft mt-16"><h3>${esc(m.title||'一件值得记住的事')}</h3><p class="modal-copy mt-8">${esc(m.body)}</p><div class="detail-meta mt-16">${U.badge(m.category,'green')}${U.badge(U.sources[m.source],'gray')}</div>${m.tags.length?`<p class="quiet-note">标签：${esc(m.tags.join('、'))}</p>`:''}${m.sourceDate?`<p class="quiet-note">来源日期：${U.date(m.sourceDate)}</p>`:''}${m.nextAction?`<p class="modal-copy mt-8">下次行动：${esc(m.nextAction)}</p>`:''}</div><div class="inline-note mt-16">${icon('lock',16)}私人提醒不会分享。对方只能阅读与提交补充，你可以随时撤销分享。</div><div class="form-actions"><button class="btn secondary" data-action="close">暂不分享</button><button class="btn primary" id="share-memory">确认分享</button></div>`);
-    document.querySelector('#share-memory').onclick=()=>{m.shared=true;m.connectionId=state.connectionId;m.comments=[];save();U.close();U.render();U.toast('已向当前连接分享这张记忆');};
+    document.querySelector('#share-memory').onclick=()=>{m.shared=true;m.connectionId=state.connectionId;m.comments=[];m.privateReminders={};m.firedPrivateReminders={};U.notify('memory',m.id,'对方与你分享了一张记忆',state.partner.username);save();U.close();U.render();U.toast('已向当前连接分享这张记忆');};
   };
-  U.actions['memory-unshare']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;U.confirm('撤销分享？','对方将失去这张卡片的访问权限，依附的补充 / 更正也会删除。再次分享不会恢复旧评论。','撤销分享',()=>{m.shared=false;m.connectionId=null;m.comments=[];save();U.close();U.render();U.toast('已恢复为仅自己可见');});};
+  U.actions['memory-unshare']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;U.confirm('撤销分享？','对方将失去这张卡片的访问权限，依附的补充 / 更正也会删除。再次分享不会恢复旧评论。','撤销分享',()=>{m.shared=false;m.connectionId=null;m.comments=[];m.privateReminders={};m.firedPrivateReminders={};save();U.close();U.render();U.toast('已恢复为仅自己可见');});};
   U.actions['memory-archive']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;m.archived=true;save();U.close();U.render();U.toast('已归档，对方的分享访问不受影响');};
   U.actions['memory-restore']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;m.archived=false;save();U.close();U.render();U.toast('已恢复到记忆列表');};
-  U.actions['memory-delete']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;U.confirm('删除这张记忆？','删除后无法在预览中恢复。对方也会失去访问权限，相关提醒与补充将一并移除。','删除记忆',()=>{m.deleted=true;m.shared=false;m.reminder='';m.comments=[];save();U.close();U.render();U.toast('记忆已删除');},true);};
-  U.actions['memory-comment']=({id})=>{const m=U.find('memories',id);if(!m||m.owner==='me'||!U.memoryVisible(m))return;U.form('补充 / 更正',`${U.field('body','想补充的话','textarea','','说说你的看法，作者会自行决定是否更新原文。','required maxlength="1000"')}<p class="quiet-note">这不会直接修改 ${esc(state.partner.name)} 的原始记录。</p>`,v=>{if(!v.body)return '请填写补充内容。';m.comments.push({author:'me',body:v.body,at:new Date().toISOString()});U.toast('补充已保存，原文保持不变');},{draft:`comment-${id}`,label:'提交补充'});};
+  U.actions['memory-delete']=({id})=>{const m=U.find('memories',id);if(!m||m.owner!=='me')return;U.confirm('删除这张记忆？','删除后无法在预览中恢复。对方也会失去访问权限，相关提醒与补充将一并移除。','删除记忆',()=>{m.deleted=true;m.shared=false;m.reminder='';m.comments=[];m.privateReminders={};m.firedPrivateReminders={};save();U.close();U.render();U.toast('记忆已删除');},true);};
+  U.actions['memory-comment']=({id})=>{const m=U.find('memories',id);if(!m||m.owner==='me'||!U.memoryVisible(m))return;U.form('补充 / 更正',`${U.field('body','想补充的话','textarea','','说说你的看法，作者会自行决定是否更新原文。','required maxlength="1000"')}<p class="quiet-note">这不会直接修改 ${esc(state.partner.name)} 的原始记录。</p>`,v=>{if(!v.body)return '请填写补充内容。';m.comments.push({author:'me',body:v.body,at:new Date().toISOString()});U.notify('memory',m.id,'对方为你的记忆留下补充 / 更正',state.partner.username);U.toast('补充已保存，原文保持不变');},{draft:`comment-${id}`,label:'提交补充'});};
 
   /* Expressions have response status, never read receipts or deadlines. */
   U.expressionForm=()=>{
@@ -248,7 +268,7 @@
     const selected=state.drafts['expression-new']?.type||U.presets[0];
     const form=U.form('把想说的话，轻轻说出来',`<div class="expression-choices">${U.presets.map((p,i)=>`<label class="expression-choice"><input type="radio" name="type" value="${esc(p)}" ${p===selected?'checked':''}><span>${icon(['heart','chat','leaf','info','cup','edit'][i],18)}${esc(p)}</span></label>`).join('')}</div>${U.field('body','想多说一点 <small>前五项可跳过；自由留言必填</small>','textarea','','可以只选一种表达，也可以写几句话。')}<details class="optional-details"><summary>希望何时、怎样回应 · 可选</summary><div class="form-grid">${U.select('window','希望回应时间',['有空再看','今天聊聊','现在方便吗'],'有空再看')}${U.select('mode','希望回应方式',[['','不特别指定'],...['听我说','一起想办法','陪我一下','暂时只想告诉你']],'')}</div></details><div class="inline-note">${icon('leaf',16)}这些只是你的偏好。没有回应倒计时，也不会自动催促。</div>`,v=>{
       if(v.type==='自由留言'&&!v.body)return '自由留言需要填写正文。';
-      state.expressions.unshift({id:U.uid('x'),sender:'me',type:v.type,body:v.body,window:v.window,mode:v.mode,status:'OPEN',replies:[],createdAt:new Date().toISOString(),connectionId:state.connectionId});U.toast('表达已存入发出列表');
+      state.expressions.unshift({id:U.uid('x'),sender:'me',type:v.type,body:v.body,window:v.window,mode:v.mode,status:'OPEN',replies:[],createdAt:new Date().toISOString(),connectionId:state.connectionId});U.notify('expression',state.expressions[0].id,'收到一条新的表达',state.partner.username);U.toast('表达已存入发出列表');
     },{draft:'expression-new',label:'发送给 '+state.partner.name,eyebrow:'A LITTLE EXPRESSION',wide:true});
     // Radios are restored separately because namedItem returns a RadioNodeList.
     if(state.drafts['expression-new']?.type)form.querySelectorAll('[name=type]').forEach(el=>el.checked=el.value===selected);
@@ -259,7 +279,7 @@
     const mine=x.sender==='me';
     U.modal(x.type,`<div class="detail-meta">${U.avatar(x.sender,'small')}<small class="muted">${esc(U.person(x.sender))} · ${U.date(x.createdAt)} ${U.time(x.createdAt)}</small>${U.badge(x.status==='OPEN'?'待回应':'已回应',x.status==='OPEN'?'peach':'green')}</div>${x.body?`<p class="modal-copy">${esc(x.body)}</p>`:''}<div class="detail-meta mt-16">${x.window?U.badge(x.window,'gray','clock'):''}${x.mode?U.badge(x.mode,'purple'):''}</div><p class="quiet-note">回应状态只表示是否回应，不代表事情已经解决。</p>${x.replies.length?`<hr class="divider"><div class="reply-list">${x.replies.map(r=>`<div class="reply-item">${U.avatar(r.author,'small')}<div><small class="muted">${esc(U.person(r.author))} · ${U.date(r.at)} ${U.time(r.at)}</small><p class="modal-copy">${esc(r.body)}</p></div></div>`).join('')}</div>`:''}${!mine?`<hr class="divider"><p class="detail-label">轻轻回应</p><div class="filter-chips">${['看到了，晚点找你','现在方便','想换个时间'].map(label=>`<button class="filter-chip" data-action="expression-quick-reply" data-id="${id}" data-value="${esc(label)}">${esc(label)}</button>`).join('')}</div>`:''}<div class="detail-footer">${U.act('expression-reply',id,mine?'继续补充':'写一句回应','btn soft')}${U.act('invite-from-expression',id,'商量具体时间','btn secondary')}${U.act('commitment-from-expression',id,'写下我的下一步')}<span class="spacer"></span>${mine?U.act('expression-withdraw',id,'撤回','text-link danger'):''}</div>`,{eyebrow:mine?'SENT BY ME':'A MESSAGE FOR YOU',wide:true});
   };
-  U.addReply=(x,body)=>{x.replies.push({author:'me',body,at:new Date().toISOString()});if(x.sender!=='me')x.status='RESPONDED';save();U.close();U.render();U.toast(x.sender==='me'?'已追加补充':'回应已保存');};
+  U.addReply=(x,body)=>{x.replies.push({author:'me',body,at:new Date().toISOString()});if(x.sender!=='me')x.status='RESPONDED';U.notify('expression',x.id,x.sender==='me'?'对方为表达追加了补充':'对方回应了你的表达',state.partner.username);save();U.close();U.render();U.toast(x.sender==='me'?'已追加补充':'回应已保存');};
   U.actions['expression-new']=U.expressionForm;U.actions['expression-view']=({id})=>U.expressionDetail(id);
   U.actions['expression-quick-reply']=({id,value})=>{const x=U.find('expressions',id);if(x&&x.sender!=='me'&&x.status!=='WITHDRAWN'&&U.shared(x))U.addReply(x,value);};
   U.actions['expression-reply']=({id})=>{const x=U.find('expressions',id);if(!x||!U.shared(x)||x.status==='WITHDRAWN')return;U.form(x.sender==='me'?'继续补充':'写一句回应',U.field('body',x.sender==='me'?'想补充的话':'你的回应','textarea','','一句话也可以。','required maxlength="1000"'),v=>{if(!v.body)return '请写一句话。';U.addReply(x,v.body);},{draft:`reply-${id}`,label:x.sender==='me'?'保存补充':'发送回应',eyebrow:'TAKE YOUR TIME'});};
@@ -289,7 +309,7 @@
   U.actions['event-reminder']=({id})=>{const e=U.find('events',id);if(!e||!U.eventVisible(e))return;U.form('只提醒我自己',`${U.field('reminder','提醒时间 <small>留空可取消提醒</small>','datetime-local',e.reminder?U.local(e.reminder):'')}<div class="inline-note">${icon('lock',16)}提醒仅在站内显示，网页关闭后不保证送达。共同安排双方分别设置。</div>`,v=>{e.reminder=U.fromLocal(v.reminder);U.toast(v.reminder?'私人提醒已保存':'私人提醒已取消');},{label:'保存提醒',eyebrow:'ONLY FOR ME'});};
   U.actions['event-delete']=({id})=>{const e=U.find('events',id);if(!e||e.kind!=='PERSONAL'||e.owner!=='me')return;U.confirm('删除个人安排？','这条个人安排及其提醒将被移除。','删除安排',()=>{e.deleted=true;e.reminder='';save();U.close();U.render();U.toast('个人安排已删除');},true);};
   U.actions['event-change']=({id})=>U.inviteForm({eventId:id});
-  U.actions['event-cancel']=({id})=>{const e=U.find('events',id);if(!e||e.kind!=='SHARED'||!U.shared(e))return;U.form('取消这次共同安排',`${U.field('reason','取消说明 <small>可选</small>','textarea','','可以留一句话，让对方知道。')}<div class="inline-note peach">${icon('info',16)}确认后立即取消，无需对方批准；待处理的修改提案也会撤销。</div>`,v=>{e.status='CANCELLED';e.cancelReason=v.reason;e.reminder='';if(e.pendingChange){const i=U.find('invitations',e.pendingChange);if(i)i.status='WITHDRAWN';e.pendingChange=null;}U.toast('共同安排已取消');},{label:'确认取消',eyebrow:'CHANGE OF PLANS'});};
+  U.actions['event-cancel']=({id})=>{const e=U.find('events',id);if(!e||e.kind!=='SHARED'||!U.shared(e))return;U.form('取消这次共同安排',`${U.field('reason','取消说明 <small>可选</small>','textarea','','可以留一句话，让对方知道。')}<div class="inline-note peach">${icon('info',16)}确认后立即取消，无需对方批准；待处理的修改提案也会撤销。</div>`,v=>{e.status='CANCELLED';e.cancelReason=v.reason;e.reminder='';e.privateReminders={};U.notify('system','', '对方取消了一次共同安排',state.partner.username);if(e.pendingChange){const i=U.find('invitations',e.pendingChange);if(i)i.status='WITHDRAWN';e.pendingChange=null;}U.toast('共同安排已取消');},{label:'确认取消',eyebrow:'CHANGE OF PLANS'});};
 
   /* Invitations are proposals, not events, until the receiver accepts. */
   U.inviteForm=({expressionId='',eventId='',previousId=''}={})=>{
@@ -301,15 +321,15 @@
       if(Date.parse(start)<=Date.now())return '请选择还未开始的时间。';if(Date.parse(end)<=Date.parse(start))return '结束时间需要晚于开始时间。';
       if(previous&&(previous.status!=='PENDING'||previous.sender!=='partner'))return '原邀约已发生变化，请重新查看。';
       const invitation={id:U.uid('i'),sender:'me',title:v.title,start,end,location:v.location,note:v.note,purpose:event?'CHANGE':previous?.purpose||'CREATE',targetEventId:eventId||previous?.targetEventId||null,baseVersion:event?.version||previous?.baseVersion||null,expressionId:expressionId||previous?.expressionId||null,previousId:previousId||null,connectionId:state.connectionId,status:'PENDING',createdAt:new Date().toISOString()};
-      if(previous)previous.status='SUPERSEDED';state.invitations.unshift(invitation);if(event)event.pendingChange=invitation.id;if(previous?.targetEventId){const target=U.find('events',previous.targetEventId);if(target)target.pendingChange=invitation.id;}U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
+      if(previous)previous.status='SUPERSEDED';state.invitations.unshift(invitation);U.notify('invitation',invitation.id,invitation.purpose==='CHANGE'?'收到一份共同安排修改提案':'收到一份新邀约',state.partner.username);if(event)event.pendingChange=invitation.id;if(previous?.targetEventId){const target=U.find('events',previous.targetEventId);if(target)target.pendingChange=invitation.id;}U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
     },{draft:eventId?`change-${eventId}`:previousId?`counter-${previousId}`:'invitation-new',label:previous?'发出新提议':'发送邀约',eyebrow:'MAKE ROOM FOR US'});
   };
-  U.conflicts=i=>state.events.filter(e=>U.eventVisible(e)&&e.status==='CONFIRMED'&&e.id!==i.targetEventId&&Date.parse(e.start)<Date.parse(i.end)&&Date.parse(e.end)>Date.parse(i.start));
+  U.conflicts=i=>state.events.filter(e=>(U.eventVisible(e)||(U.connected()&&e.kind==='PERSONAL'&&e.owner==='partner'&&!e.deleted))&&e.status==='CONFIRMED'&&e.id!==i.targetEventId&&Date.parse(e.start)<Date.parse(i.end)&&Date.parse(e.end)>Date.parse(i.start));
   U.inviteLabels={PENDING:'待确认',ACCEPTED:'已接受',DECLINED:'已婉拒',WITHDRAWN:'已撤回',EXPIRED:'已过期',SUPERSEDED:'已提出其他时间'};
   U.inviteDetail=id=>{
     U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i))return U.toast('这份邀约已不可访问',true);
     const incoming=i.sender==='partner';const target=i.targetEventId&&U.find('events',i.targetEventId);const conflicts=U.conflicts(i);
-    U.modal(i.purpose==='CHANGE'?'共同安排修改提案':i.title,`<div class="detail-meta">${U.avatar(i.sender,'small')}<small class="muted">${esc(U.person(i.sender))} 的${i.purpose==='CHANGE'?'修改提案':'邀约'}</small>${U.badge(U.inviteLabels[i.status],i.status==='PENDING'?'peach':'gray')}</div>${target?`<div class="card soft"><p class="quiet-note">原安排 · 在接受修改前保持有效</p><h3 class="mt-8">${esc(target.title)}</h3><p class="quiet-note mt-8">${U.formatRange(target)}</p></div><p class="detail-label">提议改为</p><h3>${esc(i.title)}</h3>`:''}<p class="modal-copy mt-8">${U.formatRange(i)}</p>${i.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(i.location)}</p>`:''}${i.note?`<p class="modal-copy mt-16">${esc(i.note)}</p>`:''}${i.status==='PENDING'&&conflicts.length?`<div class="inline-note peach mt-16">${icon('info',16)}时间有重叠：${conflicts.map(e=>`${U.date(e.start)} ${U.time(e.start)}–${U.time(e.end)}`).join('、')}。接受前可以再确认一下。</div>`:''}${i.previousId?'<p class="quiet-note mt-16">这是一次替代提议，原提案已结束；新的接收者需要再次确认。</p>':''}<div class="detail-footer">${i.status==='PENDING'?incoming?`${U.act('invite-accept',id,'接受邀约','btn primary')}${U.act('invite-counter',id,'商量其他时间','btn secondary')}${U.act('invite-decline',id,'婉拒')}`:`${U.act('invite-withdraw',id,'撤回邀约','btn secondary')}<p class="quiet-note">等待对方确认；不自动接受。</p>`:i.eventId?U.act('event-view',i.eventId,'查看共同安排','btn soft'):'<p class="quiet-note">这份提案已经结束。</p>'}</div>`,{eyebrow:'AN INVITATION'});
+    U.modal(i.purpose==='CHANGE'?'共同安排修改提案':i.title,`<div class="detail-meta">${U.avatar(i.sender,'small')}<small class="muted">${esc(U.person(i.sender))} 的${i.purpose==='CHANGE'?'修改提案':'邀约'}</small>${U.badge(U.inviteLabels[i.status],i.status==='PENDING'?'peach':'gray')}</div>${target?`<div class="card soft"><p class="quiet-note">原安排 · 在接受修改前保持有效</p><h3 class="mt-8">${esc(target.title)}</h3><p class="quiet-note mt-8">${U.formatRange(target)}</p></div><p class="detail-label">提议改为</p><h3>${esc(i.title)}</h3>`:''}<p class="modal-copy mt-8">${U.formatRange(i)}</p>${i.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(i.location)}</p>`:''}${i.note?`<p class="modal-copy mt-16">${esc(i.note)}</p>`:''}${i.status==='PENDING'&&conflicts.length?`<div class="inline-note peach mt-16">${icon('info',16)}时间有重叠：${conflicts.map(e=>`${U.date(e.start)} ${U.time(e.start)}–${U.time(e.end)}`).join('、')}。接受前可以再确认一下。</div>`:''}${i.previousId?'<p class="quiet-note mt-16">这是一次替代提议，原提案已结束；新的接收者需要再次确认。</p>':''}<div class="detail-footer">${i.status==='PENDING'?incoming?`${U.act('invite-accept',id,i.purpose==='CHANGE'?'接受修改':'接受邀约','btn primary')}${U.act('invite-counter',id,'商量其他时间','btn secondary')}${U.act('invite-decline',id,'婉拒')}`:`${U.act('invite-withdraw',id,'撤回邀约','btn secondary')}<p class="quiet-note">等待对方确认；不自动接受。</p>`:i.eventId?U.act('event-view',i.eventId,'查看共同安排','btn soft'):'<p class="quiet-note">这份提案已经结束。</p>'}</div>`,{eyebrow:'AN INVITATION'});
   };
   U.acceptInvite=id=>{
     U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.sender!=='partner'||i.status!=='PENDING')return U.toast('邀约状态已变化，请重新查看',true);
@@ -320,18 +340,18 @@
     }else{
       const existing=state.events.find(e=>e.invitationId===i.id);if(existing)i.eventId=existing.id;else {const e={id:U.uid('e'),kind:'SHARED',title:i.title,start:i.start,end:i.end,location:i.location,note:i.note,status:'CONFIRMED',connectionId:state.connectionId,version:1,pendingChange:null,reminder:'',invitationId:i.id};state.events.push(e);i.eventId=e.id;}
     }
-    i.status='ACCEPTED';save();U.close();U.render();U.toast(i.purpose==='CHANGE'?'修改已确认，共同安排已更新':'已接受，加入共同日历');
+    i.status='ACCEPTED';U.notify('invitation',i.id,'对方接受了你的提议',state.partner.username);save();U.close();U.render();U.toast(i.purpose==='CHANGE'?'修改已确认，共同安排已更新':'已接受，加入共同日历');
   };
   U.actions['invite-new']=()=>U.inviteForm();U.actions['invite-view']=({id})=>U.inviteDetail(id);
   U.actions['invite-accept']=({id})=>{const i=U.find('invitations',id);if(!i)return;const conflicts=U.conflicts(i);if(conflicts.length)U.confirm('时间有重叠，仍然接受？',`以下时段与现有安排重叠：\n${conflicts.map(e=>`${U.date(e.start)} ${U.time(e.start)}–${U.time(e.end)}`).join('\n')}\n\n你可以明确确认仍然接受，也可以返回商量其他时间。`,'仍然接受',()=>U.acceptInvite(id));else U.acceptInvite(id);};
-  U.endInvite=(id,status)=>{U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.status!=='PENDING')return U.toast('这份提案已经结束',true);if(status==='WITHDRAWN'?i.sender!=='me':i.sender!=='partner')return;if(i.targetEventId){const e=U.find('events',i.targetEventId);if(e?.pendingChange===i.id)e.pendingChange=null;}i.status=status;save();U.close();U.render();U.toast(status==='DECLINED'?'已婉拒，原安排不会改变':'提案已撤回');};
+  U.endInvite=(id,status)=>{U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.status!=='PENDING')return U.toast('这份提案已经结束',true);if(status==='WITHDRAWN'?i.sender!=='me':i.sender!=='partner')return;if(i.targetEventId){const e=U.find('events',i.targetEventId);if(e?.pendingChange===i.id)e.pendingChange=null;}i.status=status;U.notify('invitation',i.id,status==='DECLINED'?'对方婉拒了你的提议':'对方撤回了一份提议',state.partner.username);save();U.close();U.render();U.toast(status==='DECLINED'?'已婉拒，原安排不会改变':'提案已撤回');};
   U.actions['invite-decline']=({id})=>U.endInvite(id,'DECLINED');U.actions['invite-withdraw']=({id})=>U.confirm('撤回这份邀约？','撤回后对方不能再接受；已有共同安排保持不变。','撤回邀约',()=>U.endInvite(id,'WITHDRAWN'));U.actions['invite-counter']=({id})=>U.inviteForm({previousId:id});
 
   /* Commitments belong to the person who will fulfill them. */
   U.commitmentForm=(id=null,source={})=>{
     const c=id?U.find('commitments',id):null;if(c&&(c.owner!=='me'||c.deleted))return;
     U.form(c?'编辑我的承诺':'写下我答应的事',`${U.field('title','我的承诺 <span class="coral">*</span>','text',c?.title||'','我愿意为自己写下的下一步','required maxlength="100"')}${U.field('body','说明 <small>可选</small>','textarea',c?.body||'','留一点背景，方便以后记得。')}<div class="form-grid">${U.field('due','截止日期 <small>可选</small>','date',c?.due||'')}${U.field('dueTime','具体截止时间 <small>可选</small>','time',c?.dueAt?U.time(c.dueAt):'')}</div>${U.field('nextAction','下一步 <small>可选</small>','text',c?.nextAction||'','先做一件小事','maxlength="100"')}${U.field('reminder','私人提醒 <small>可选</small>','datetime-local',c?.reminder?U.local(c.reminder):'')}<div class="inline-note">${icon('lock',16)}${c?.shared?'这条承诺已分享。截止时间变更会告知对方，不需要对方审批。':'默认仅自己可见。承诺只由履行者为自己创建。'} ${source.sourceId?'关联表达不会自动给任何人创建任务。':''}</div>`,v=>{
-      if(!v.title)return '请填写承诺标题。';if(v.dueTime&&!v.due)return '填写具体截止时间时，请同时选择日期。';const values={title:v.title,body:v.body,due:v.due,dueAt:v.due&&v.dueTime?U.fromLocal(v.due+'T'+v.dueTime):'',nextAction:v.nextAction,reminder:U.fromLocal(v.reminder)};if(c)Object.assign(c,values);else state.commitments.unshift({id:U.uid('c'),owner:'me',...values,status:'OPEN',shared:false,connectionId:null,result:'',...source});U.toast(c?'承诺已更新':'已写下自己的下一步');
+      if(!v.title)return '请填写承诺标题。';if(v.dueTime&&!v.due)return '填写具体截止时间时，请同时选择日期。';const values={title:v.title,body:v.body,due:v.due,dueAt:v.due&&v.dueTime?U.fromLocal(v.due+'T'+v.dueTime):'',nextAction:v.nextAction,reminder:U.fromLocal(v.reminder)};if(c){if(c.shared&&U.shared(c)&&(c.due!==values.due||c.dueAt!==values.dueAt))U.notify('commitment',c.id,'对方调整了一条已分享承诺的截止时间',state.partner.username);Object.assign(c,values);}else state.commitments.unshift({id:U.uid('c'),owner:'me',...values,status:'OPEN',shared:false,connectionId:null,result:'',...source});U.toast(c?'承诺已更新':'已写下自己的下一步');
     },{draft:id?`commitment-${id}`:'commitment-new',label:c?'保存修改':'保存承诺',eyebrow:'A PROMISE TO KEEP'});
   };
   U.commitmentDetail=id=>{
@@ -342,9 +362,9 @@
   };
   U.actions['commitment-new']=()=>U.commitmentForm();U.actions['commitment-edit']=({id})=>U.commitmentForm(id);U.actions['commitment-view']=({id})=>U.commitmentDetail(id);
   U.actions['commitment-complete']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me'||c.status!=='OPEN')return;U.form('记下这次完成',`${U.field('result','完成记录 <small>可选</small>','textarea','','后来做了什么？')}<div class="inline-note">${icon('leaf',16)}完成记录不代表所有感受已经解决。可以再找个时间聊聊。</div>`,v=>{c.status='DONE';c.result=v.result;c.reminder='';U.toast('承诺已记为完成');},{label:'记为完成',eyebrow:'ONE SMALL STEP'});};
-  U.actions['commitment-reopen']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;c.status='OPEN';save();U.close();U.render();U.toast('承诺已重新打开');};
-  U.actions['commitment-cancel']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;U.confirm('取消这条承诺？','这不会删除原记录。已分享的状态变更会让对方知道，不需要对方审批。','取消承诺',()=>{c.status='CANCELLED';c.reminder='';save();U.close();U.render();U.toast('承诺已取消');});};
-  U.actions['commitment-share']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;if(!U.connected())return U.connectionRequired();U.confirm('分享这条承诺？',`${c.title}\n${c.body||''}\n${c.due?'截止时间：'+U.date(c.due)+(c.dueAt?' '+U.time(c.dueAt):''):''}\n${c.nextAction?'下一步：'+c.nextAction:''}\n${c.result?'完成记录：'+c.result:''}\n\n对方可以阅读，不能修改状态或截止时间。私人提醒不会分享。`,'确认分享',()=>{c.shared=true;c.connectionId=state.connectionId;save();U.close();U.render();U.toast('承诺已分享给当前连接');});};
+  U.actions['commitment-reopen']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;c.status='OPEN';if(c.shared&&U.shared(c))U.notify('commitment',c.id,'对方重新打开了一条已分享承诺',state.partner.username);save();U.close();U.render();U.toast('承诺已重新打开');};
+  U.actions['commitment-cancel']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;U.confirm('取消这条承诺？','这不会删除原记录。已分享的状态变更会让对方知道，不需要对方审批。','取消承诺',()=>{c.status='CANCELLED';c.reminder='';if(c.shared&&U.shared(c))U.notify('commitment',c.id,'对方取消了一条已分享承诺',state.partner.username);save();U.close();U.render();U.toast('承诺已取消');});};
+  U.actions['commitment-share']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;if(!U.connected())return U.connectionRequired();U.confirm('分享这条承诺？',`${c.title}\n${c.body||''}\n${c.due?'截止时间：'+U.date(c.due)+(c.dueAt?' '+U.time(c.dueAt):''):''}\n${c.nextAction?'下一步：'+c.nextAction:''}\n${c.result?'完成记录：'+c.result:''}\n\n对方可以阅读，不能修改状态或截止时间。私人提醒不会分享。`,'确认分享',()=>{c.shared=true;c.connectionId=state.connectionId;U.notify('commitment',c.id,'对方与你分享了一条承诺',state.partner.username);save();U.close();U.render();U.toast('承诺已分享给当前连接');});};
   U.actions['commitment-unshare']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;c.shared=false;c.connectionId=null;save();U.close();U.render();U.toast('承诺已恢复为仅自己可见');};
   U.actions['commitment-delete']=({id})=>{const c=U.find('commitments',id);if(!c||c.owner!=='me')return;U.confirm('删除这条承诺？','这条记录与私人提醒将被删除，对方也会失去访问。','删除承诺',()=>{c.deleted=true;c.shared=false;c.reminder='';save();U.close();U.render();U.toast('承诺已删除');},true);};
   U.actions.notifications=()=>{

@@ -114,7 +114,8 @@
   };
   U.validateReminderValues = values => {
     if (!values.reminder) return null;
-    if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder)))) return '请选择有效的提醒时间。';
+    try {if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder)))) return '请选择有效的提醒时间。';}
+    catch (_) {return '请选择有效的提醒时间。';}
     const mode = values.deliveryMode || 'IN_APP';
     if (!modes[mode]) return '请选择站内提醒或站内提醒 + Mail 提醒。';
     if (mode === 'IN_APP_AND_MAIL' && !U.mailCapability().available) return U.mailCapability().reason+' 提醒输入已保留，请修改后重新保存。';
@@ -207,6 +208,7 @@
     if (changed) U.save();
   };
   U.advanceMailPreview = () => {
+    const unread=U.unread();
     U.refreshReminders();
     let changed=false;
     U.state.mailDeliveries.forEach(d => {
@@ -222,7 +224,9 @@
       }
       changed=true;
     });
-    if (changed) {U.save();if(document.querySelector('.notification-list'))U.actions.notifications();}
+    if (changed) U.save();
+    if (unread!==U.unread()) U.render();
+    if (changed && document.querySelector('.notification-list')) U.actions.notifications();
   };
   U.mailDelivery = notification => (U.state.mailDeliveries || []).find(d => d.notificationId===notification.id && d.recipient===U.state.user.username) || null;
   U.mailDeliveryHTML = notification => {

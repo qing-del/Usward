@@ -12,7 +12,7 @@
     const list=filtered();const limit=U.view.memories.limit;return list.length?`<div class="memory-grid">${list.slice(0,limit).map(card).join('')}</div>${list.length>limit?`<div class="memory-load-more"><button class="btn secondary" data-action="memory-load-more">再翻 ${Math.min(9,list.length-limit)} 张记忆</button></div>`:''}`:U.empty('暂时没有找到这张记忆','可以试试别的关键词，或清除筛选后再看看。','memory-filters-clear','清除筛选');
   }
   U.pages.memories=()=>{
-    if(!U.view.memories)U.view.memories={tab:'all',category:'all',tag:'',search:'',limit:9};
+    if(!U.view.memories)U.view.memories={tab:location.hash==='#archived'?'archived':'all',category:'all',tag:'',search:'',limit:9};
     const s=U.state,v=U.view.memories;const tags=[...new Set(s.memories.filter(U.memoryVisible).flatMap(m=>m.tags))].slice(0,10);
     return `${U.heading('LITTLE THINGS, WELL KEPT','记得你，也记得自己。','偏好、边界、平常的瞬间，都可以慢慢收好。',`<button class="btn primary" data-action="memory-new">${icon('plus',16)}记一张卡片</button>`)}
     <div class="memory-intro"><span class="icon-box">${icon('memory',22)}</span><p>记忆是一份温柔的备忘，不是关于彼此的定论。<span>新记录默认「我的理解，待确认」，分享由你自己决定。</span></p><span class="memory-intro-flower">${icon('flower',29)}</span></div>

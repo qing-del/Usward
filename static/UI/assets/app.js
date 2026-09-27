@@ -157,6 +157,7 @@
   };
   U.render = () => {
     U.expire();U.refreshReminders();
+    if(page!=='login'&&!state.signedIn){window.location.replace('login.html');return;}
     if(page === 'login') {document.querySelector('#app').innerHTML=U.pages.login ? U.pages.login() : '';return;}
     const active = page === 'commitments' ? 'me' : page;
     const label = page === 'commitments' ? '我的承诺' : nav.find(n=>n.key === active)?.label || '今天';
@@ -211,7 +212,7 @@
   U.connectionRequired=()=>{U.modal('先邀请一个重要的人',`<div class="inline-note">${icon('link',19)}表达与邀约需要双方主动连接。连接后，历史卡片和承诺仍只对你自己可见。</div><p class="modal-copy mt-16">现在也可以先记一张卡片，或给自己留一段时间。</p><div class="form-actions"><button class="btn secondary" data-action="memory-new">先记下来</button><a class="btn primary" href="me.html">去邀请连接 ${icon('arrow',15)}</a></div>`);};
   U.actions.close=U.close;
   U.actions.preview=()=>U.modal('交互预览',`<p class="modal-copy">这是一份使用示例数据的 HTML 预览。操作只保存在当前浏览器，没有连接后端，也不会向另一位用户发送真实通知。</p><div class="inline-note mt-16">${icon('info',17)}${storageAvailable?'本地修改会在刷新后保留。':'当前浏览器无法保存数据，修改仅在本次打开期间保留。'} 演示双方操作请使用已有的收到内容。</div><div class="list-row"><div><h3>双人连接状态</h3><p>包含收到的表达、邀约和共享内容。</p></div><button class="btn soft small" data-action="reset-connected">载入示例</button></div><div class="list-row"><div><h3>单人使用状态</h3><p>个人记录、日历和承诺仍可使用。</p></div><button class="btn soft small" data-action="reset-solo">载入示例</button></div><p class="quiet-note mt-16">载入示例会替换当前浏览器的预览修改。</p>`);
-  U.reset=connected=>U.confirm('重新载入示例？','这会清除你在这份预览中新增或修改的内容，替换为对应状态的示例数据。','重新载入',()=>{state=seed(connected);U.state=state;save();U.close();U.view={};U.render();U.toast(connected?'已载入双人示例':'已载入单人示例');});
+  U.reset=connected=>U.confirm('重新载入示例？','这会清除你在这份预览中新增或修改的内容，替换为对应状态的示例数据。','重新载入',()=>{state=seed(connected);if(!connected){state.memories.filter(m=>m.owner==='me').forEach(m=>{m.shared=false;m.connectionId=null;});state.commitments.filter(c=>c.owner==='me').forEach(c=>{c.shared=false;c.connectionId=null;});}U.state=state;save();U.close();U.view={};U.render();U.toast(connected?'已载入双人示例':'已载入单人示例');});
   U.actions['reset-connected']=()=>U.reset(true);U.actions['reset-solo']=()=>U.reset(false);
 
   /* Memory cards: private by default; whole-card sharing requires preview. */

@@ -70,3 +70,55 @@ test('stale expression or connection blocks a reply or new send without partial 
   assert.match(env.submit({...expressionValues,followUpMode:'IN_APP'}),/连接已变化/);
   assert.equal(U.state.expressions.length,length);
 });
+
+test('whole-card share saves independent modes; comments follow author and never rewrite original',()=>{
+  const env=preview(),{U}=env;available(U);
+  U.actions['memory-share']({id:'m1'});
+  assert.match(env.form.html,/私人提醒不会分享/);assert.match(env.form.html,/不赶时间的早餐/);
+  assert.equal(env.submit({outgoingMode:'NONE',followUpMode:'IN_APP_AND_MAIL'}),undefined);
+  assert.equal(U.find('memories','m1').shared,true);
+  assert.equal(U.state.notifications.filter(n=>n.resourceId==='m1').length,0);
+  U.switchAccount('chenyu');const body=U.find('memories','m1').body;
+  U.actions['memory-comment']({id:'m1'});assert.equal(env.submit({body:'我的补充'}),undefined);
+  assert.equal(U.find('memories','m1').body,body);
+  assert.equal(U.state.mailDeliveries.filter(d=>d.recipient==='linan').length,1);
+  assert.equal(U.myNotificationSetting('MEMORY_CARD','m1').followUpMode,'IN_APP');
+});
+
+test('shared memory edits notify reader setting; private reminder and archive changes stay private',()=>{
+  const env=preview(),{U}=env;available(U);
+  U.switchAccount('chenyu');U.putNotificationSetting('MEMORY_CARD','m2','IN_APP_AND_MAIL',null);U.switchAccount('linan');
+  const m=U.find('memories','m2');const values={title:m.title,body:m.body,category:m.category,source:m.source,tags:m.tags.join(','),sourceDate:m.sourceDate,nextAction:m.nextAction,deliveryMode:'NONE',reminder:''};
+  U.memoryForm('m2');env.submit(values);
+  assert.equal(U.state.notifications.filter(n=>n.resourceId==='m2'&&n.sourceType==='BUSINESS').length,0);
+  U.memoryForm('m2');env.submit({...values,body:'作者更新整张卡片'});
+  assert.equal(U.state.mailDeliveries.filter(d=>d.recipient==='chenyu').length,1);
+  const count=U.state.notifications.length;U.actions['memory-archive']({id:'m2'});U.actions['memory-restore']({id:'m2'});
+  assert.equal(U.state.notifications.length,count);
+  U.memoryDetail('m2');assert.match(env.modal.html,/调整我的接收方式/);assert.match(env.modal.html,/写下我的下一步/);
+});
+
+test('unshare removes episode preferences and old business mail, keeps author private plan, reshare starts fresh',()=>{
+  const env=preview(),{U}=env;available(U);
+  U.saveReminder('MEMORY_CARD','m1',{reminder:'2026-09-29T08:00',deliveryMode:'IN_APP_AND_MAIL'});
+  U.actions['memory-share']({id:'m1'});env.submit({outgoingMode:'IN_APP_AND_MAIL',followUpMode:'NONE'});
+  U.switchAccount('chenyu');U.putNotificationSetting('MEMORY_CARD','m1','NONE',null);U.switchAccount('linan');
+  U.actions['memory-unshare']({id:'m1'});env.confirm();
+  assert.equal(U.getReminder('MEMORY_CARD','m1').status,'PENDING');
+  assert.equal(U.myNotificationSetting('MEMORY_CARD','m1'),null);
+  assert.equal(U.state.mailDeliveries[0].status,'CANCELLED');
+  const notice=U.state.notifications.find(n=>n.resourceId==='m1'&&n.sourceType==='BUSINESS');assert.ok(notice.invalidatedAt);
+  U.actions['memory-share']({id:'m1'});env.submit({outgoingMode:'NONE',followUpMode:'IN_APP'});
+  assert.equal(U.myNotificationSetting('MEMORY_CARD','m1').followUpMode,'IN_APP');
+  U.switchAccount('chenyu');assert.equal(U.myNotificationSetting('MEMORY_CARD','m1').followUpMode,'IN_APP');
+  assert.equal(U.notificationVisible(notice),false);
+});
+
+test('archived shared memory stays accessible to reader and every comment remains in detail',()=>{
+  const env=preview(),{U}=env;env.load('memories.js');
+  U.actions['memory-archive']({id:'m2'});U.switchAccount('chenyu');
+  const m=U.find('memories','m2');m.comments=Array.from({length:23},(_,i)=>({author:'me',body:'补充 '+i,at:new Date().toISOString()}));
+  U.memoryDetail('m2');assert.match(env.modal.html,/补充 22/);
+  U.view.memories={tab:'partner',category:'all',tag:'',search:'',limit:9};
+  assert.match(U.pages.memories(),/忙的时候，先发一条消息/);
+});

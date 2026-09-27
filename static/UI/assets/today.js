@@ -2,7 +2,7 @@
   const {esc,icon}=U;
   U.pages.today=()=>{
     const s=U.state,day=U.currentDay();
-    const events=s.events.filter(e=>U.eventVisible(e)&&e.status==='CONFIRMED'&&(e.allDay?e.startDate<=day&&e.endDate>day:U.day(e.start)===day)).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));
+    const events=s.events.filter(e=>U.eventVisible(e)&&e.status==='CONFIRMED'&&U.occursOn(e,day)).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start));
     const expressions=s.expressions.filter(x=>U.expressionVisible(x)&&x.sender==='partner'&&x.status==='OPEN');
     const invitations=s.invitations.filter(i=>U.shared(i)&&i.sender==='partner'&&i.status==='PENDING');
     const commitments=s.commitments.filter(c=>U.commitmentVisible(c)&&c.owner==='me'&&c.status==='OPEN');

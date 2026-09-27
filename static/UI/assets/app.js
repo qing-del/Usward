@@ -1,4 +1,4 @@
-/* Usward static preview. No accounts, API requests or real authentication. */
+/* Client-only Usward preview: demo identities, no API or real authentication. */
 (() => {
   'use strict';
   const KEY = 'usward-preview-v1';
@@ -106,7 +106,7 @@
     badge:(text,color='gray',symbol='') => `<span class="badge ${color}">${symbol ? icon(symbol,11) : ''}${esc(text)}</span>`,
     empty:(title,copy,action='',label='') => `<div class="empty-state"><div class="icon-box">${icon('leaf',25)}</div><h3>${esc(title)}</h3><p>${esc(copy)}</p>${action ? `<button class="btn soft" data-action="${action}">${icon('plus',15)}${esc(label)}</button>` : ''}</div>`,
     heading:(eyebrow,title,subtitle,button='') => `<div class="page-heading"><div><p class="eyebrow">${esc(eyebrow)}</p><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${button}</div>`,
-    date:(value,options={month:'long',day:'numeric'}) => value ? new Intl.DateTimeFormat('zh-CN',{timeZone:state.user.timezone,...options}).format(new Date(value.length === 10 ? `${value}T12:00:00+08:00` : value)) : '未设定',
+    date:(value,options={month:'long',day:'numeric'}) => value ? new Intl.DateTimeFormat('zh-CN',{timeZone:value.length===10?'UTC':state.user.timezone,...options}).format(new Date(value.length === 10 ? `${value}T12:00:00Z` : value)) : '未设定',
     time:value => new Intl.DateTimeFormat('zh-CN',{timeZone:state.user.timezone,hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(value)),
     day:value => isoDay(new Date(value),state.user.timezone),
     local:value => {
@@ -120,7 +120,7 @@
       const offset = Date.parse(parts+'Z') - assumed.getTime();
       return new Date(assumed.getTime()-offset).toISOString();
     },
-    formatRange:e => e.allDay ? `${U.date(e.startDate)} · 全天` : `${U.date(e.start)} ${U.time(e.start)}–${U.day(e.start) !== U.day(e.end) ? U.date(e.end)+' ' : ''}${U.time(e.end)}`,
+    formatRange:e => e.allDay ? `${U.date(e.startDate)}${e.endDate&&e.endDate!==addDay(e.startDate,1)?'–'+U.date(addDay(e.endDate,-1)):''} · 全天（${esc(e.eventTimezone||state.user.timezone)}）` : `${U.date(e.start)} ${U.time(e.start)}–${U.day(e.start) !== U.day(e.end) ? U.date(e.end)+' ' : ''}${U.time(e.end)}`,
     find:(collection,id) => state[collection].find(item => item.id === id),
     notify:(kind,resourceId,message,recipient=state.user.username) => state.notifications.unshift({id:U.uid('n'),kind,resourceId,message,recipient,connectionId:recipient!==state.user.username?state.connectionId:null,read:false,at:new Date().toISOString()}),
     act:(action,id='',label='查看',cls='text-link') => `<button class="${cls}" data-action="${action}" ${id ? `data-id="${esc(id)}"` : ''}>${label}</button>`,
@@ -128,6 +128,7 @@
   };
   const nav = [{key:'today',label:'今天',icon:'sun',file:'index.html'},{key:'calendar',label:'日历',icon:'calendar',file:'calendar.html'},{key:'expressions',label:'表达',icon:'heart',file:'expressions.html'},{key:'memories',label:'记忆',icon:'memory',file:'memories.html'},{key:'me',label:'我的',icon:'user',file:'me.html'}];
   U.nav = nav;
+  U.occursOn=(e,day)=>e.allDay?e.startDate<=day&&e.endDate>day:Date.parse(e.start)<Date.parse(U.fromLocal(U.addDay(day,1)+'T00:00'))&&Date.parse(e.end)>Date.parse(U.fromLocal(day+'T00:00'));
   U.switchAccount=username=>{
     if(username===state.user.username)return;
     const old=state.user.username;const flip=who=>who==='me'?'partner':who==='partner'?'me':who;
@@ -206,7 +207,7 @@
     document.querySelector('#confirm-action').addEventListener('click',onConfirm,{once:true});
   };
   U.options=(list,selected) => list.map(item=>`<option value="${esc(typeof item==='string'?item:item[0])}" ${(typeof item==='string'?item:item[0])===selected?'selected':''}>${esc(typeof item==='string'?item:item[1])}</option>`).join('');
-  U.field=(name,label,type='text',value='',placeholder='',extra='') => `<div class="field"><label for="f-${esc(name)}">${label}</label>${type==='textarea'?`<textarea id="f-${esc(name)}" name="${esc(name)}" maxlength="5000" placeholder="${esc(placeholder)}" ${extra}>${esc(value)}</textarea>`:`<input id="f-${esc(name)}" name="${esc(name)}" type="${type}" value="${esc(value)}" placeholder="${esc(placeholder)}" ${extra}>`}</div>`;
+  U.field=(name,label,type='text',value='',placeholder='',extra='') => `<div class="field"><label for="f-${esc(name)}">${label}</label>${type==='textarea'?`<textarea id="f-${esc(name)}" name="${esc(name)}" ${extra.includes('maxlength=')?'':'maxlength="5000"'} placeholder="${esc(placeholder)}" ${extra}>${esc(value)}</textarea>`:`<input id="f-${esc(name)}" name="${esc(name)}" type="${type}" value="${esc(value)}" placeholder="${esc(placeholder)}" ${extra}>`}</div>`;
   U.select=(name,label,list,selected='') => `<div class="field"><label for="f-${esc(name)}">${label}</label><select id="f-${esc(name)}" name="${esc(name)}">${U.options(list,selected)}</select></div>`;
   U.form=(title,fields,onSubmit,{label='保存',draft='',wide=false,extra='',eyebrow='KEEP A LITTLE THING'}={}) => {
     U.modal(title,`<form id="dialog-form" class="form-stack">${fields}<p class="form-message" role="alert"></p><div class="form-actions">${extra}<button type="button" class="btn secondary" data-action="close">取消</button><button class="btn primary" type="submit">${esc(label)}</button></div>${draft?'<p class="draft-note">关闭后会保留草稿，回来可以接着写。</p>':''}</form>`,{wide,eyebrow});
@@ -288,10 +289,12 @@
   U.actions['commitment-from-expression']=({id})=>U.commitmentForm(null,{sourceType:'expression',sourceId:id});
 
   /* Personal events and confirmed shared events remain separate. */
-  U.timeFields=(item={})=>`<div class="form-grid">${U.field('start','开始时间','datetime-local',item.start?U.local(item.start):U.local(stamp(addDay(U.currentDay(),1),'18:00')),'','required')}${U.field('end','结束时间','datetime-local',item.end?U.local(item.end):U.local(stamp(addDay(U.currentDay(),1),'19:00')),'','required')}</div>`;
+  U.timeFields=(item={})=>`<div class="form-grid">${U.field('start','开始时间','datetime-local',item.start?U.local(item.start):addDay(U.currentDay(),1)+'T18:00','','required')}${U.field('end','结束时间','datetime-local',item.end?U.local(item.end):addDay(U.currentDay(),1)+'T19:00','','required')}</div>`;
+  U.dateTimeGroup=(item={},offset=1)=>`<label class="checkbox-label"><input type="checkbox" name="allDay" ${item.allDay?'checked':''}>全天安排</label><div id="timed-fields" ${item.allDay?'hidden':''}>${U.timeFields(item)}</div><div id="day-fields" class="form-grid" ${item.allDay?'':'hidden'}>${U.field('startDate','开始日期','date',item.startDate||addDay(U.currentDay(),offset))}${U.field('lastDate','结束日期（包含当天）','date',item.endDate?addDay(item.endDate,-1):item.startDate||addDay(U.currentDay(),offset))}</div>`;
+  U.bindTimeForm=form=>{const toggle=()=>{const all=form.elements.allDay.checked;form.querySelector('#timed-fields').hidden=all;form.querySelector('#day-fields').hidden=!all;['start','end'].forEach(n=>form.elements[n].required=!all);['startDate','lastDate'].forEach(n=>form.elements[n].required=all);};form.elements.allDay.addEventListener('change',toggle);toggle();};
   U.eventForm=id=>{
     const e=id?U.find('events',id):null;if(e&&(e.kind!=='PERSONAL'||e.owner!=='me'))return;
-    U.form(e?'编辑个人安排':'为自己留一段时间',`${U.field('title','安排标题 <span class="coral">*</span>','text',e?.title||'','这段时间想做什么？','required maxlength="100"')}<label class="checkbox-label"><input type="checkbox" name="allDay" ${e?.allDay?'checked':''}>全天安排</label><div id="timed-fields" ${e?.allDay?'hidden':''}>${U.timeFields(e||{})}</div><div id="day-fields" class="form-grid" ${e?.allDay?'':'hidden'}>${U.field('startDate','开始日期','date',e?.startDate||U.currentDay())}${U.field('lastDate','结束日期（包含当天）','date',e?.endDate?addDay(e.endDate,-1):U.currentDay())}</div><div class="form-grid">${U.select('availability','我的时间状态',[['BUSY','正在忙'],['NEGOTIABLE','可以商量'],['FREE','有空']],e?.availability||'BUSY')}${U.field('location','地点 <small>可选</small>','text',e?.location||'','地点','maxlength="100"')}</div>${U.field('note','私人备注 <small>可选</small>','textarea',e?.note||'','备注始终只对你自己可见。')}<label class="checkbox-label"><input type="checkbox" name="offline" ${e?.offline?'checked':''}>由我记录，线下已确认</label>${U.connected()?`<label class="checkbox-label"><input type="checkbox" name="shareTitle" ${e?.shareTitle?'checked':''}>忙闲共享开启时，额外分享这条标题</label>`:''}${U.field('reminder','私人提醒 <small>可选</small>','datetime-local',e?.reminder?U.local(e.reminder):'')}<div class="inline-note">${icon('lock',16)}个人安排默认私密。线下确认记录也属于个人日历，不会变为系统共同确认。</div>`,v=>{
+    U.form(e?'编辑个人安排':'为自己留一段时间',`${U.field('title','安排标题 <span class="coral">*</span>','text',e?.title||'','这段时间想做什么？','required maxlength="100"')}<label class="checkbox-label"><input type="checkbox" name="allDay" ${e?.allDay?'checked':''}>全天安排</label><div id="timed-fields" ${e?.allDay?'hidden':''}>${U.timeFields(e||{})}</div><div id="day-fields" class="form-grid" ${e?.allDay?'':'hidden'}>${U.field('startDate','开始日期','date',e?.startDate||U.currentDay())}${U.field('lastDate','结束日期（包含当天）','date',e?.endDate?addDay(e.endDate,-1):U.currentDay())}</div><div class="form-grid">${U.select('availability','我的时间状态',[['BUSY','正在忙'],['NEGOTIABLE','可以商量'],['FREE','有空']],e?.availability||'BUSY')}${U.field('location','地点 <small>可选</small>','text',e?.location||'','地点','maxlength="100"')}</div>${U.field('note','私人备注 <small>可选</small>','textarea',e?.note||'','备注始终只对你自己可见。')}<label class="checkbox-label"><input type="checkbox" name="offline" ${e?.offline?'checked':''}>由我记录，线下已确认</label>${U.connected()?`<label class="checkbox-label"><input type="checkbox" name="shareTitle" ${e?.shareTitle?'checked':''}>忙闲共享开启时，额外分享这条标题</label>`:''}${U.field('reminder','私人提醒 <small>可选</small>','datetime-local',e?.reminder?U.local(e.reminder):'')}<div class="inline-note">${icon('lock',16)}标题与备注默认私密；忙闲共享开启时，仅展示时间与状态。线下确认记录也属于个人日历，不会变为系统共同确认。</div>`,v=>{
       if(!v.title)return '请填写安排标题。';
       const start=v.allDay?U.fromLocal(v.startDate+'T00:00'):U.fromLocal(v.start);const end=v.allDay?U.fromLocal(addDay(v.lastDate,1)+'T00:00'):U.fromLocal(v.end);
       if(!start||!end||Date.parse(end)<=Date.parse(start))return '结束时间需要晚于开始时间。';
@@ -316,13 +319,15 @@
     if(!U.connected())return U.connectionRequired();
     const event=eventId&&U.find('events',eventId);const previous=previousId&&U.find('invitations',previousId);const base=event||previous||{};
     if(event&&(event.pendingChange||Date.parse(event.start)<=Date.now()))return U.toast('请先处理已有提案，或选择未来的共同安排',true);
-    U.form(event?'商量一下新的安排':previous?'提议另一个时间':'留一段一起的时间',`${U.field('title','邀约主题 <span class="coral">*</span>','text',base.title||'','例如：一起散散步','required maxlength="100"')}${U.timeFields(base)}${U.field('location','地点 <small>可选</small>','text',base.location||'','在哪里见？','maxlength="100"')}${U.field('note','想说的话 <small>可选</small>','textarea',base.note||'','说说你想一起做的事。')}<p class="quiet-note">当前时区：${esc(state.user.timezone)}。邀约必须有明确的开始和结束时间。</p><div class="inline-note">${icon('calendar',16)}${event?'对方确认修改前，原共同安排仍然有效。':'对方接受后，才会加入双方的共同日历。'} 邀约不会自动形成承诺。</div>`,v=>{
-      if(!v.title)return '请填写邀约主题。';const start=U.fromLocal(v.start),end=U.fromLocal(v.end);
+    U.form(event?'商量一下新的安排':previous?'提议另一个时间':'留一段一起的时间',`${U.field('title','邀约主题 <span class="coral">*</span>','text',base.title||'','例如：一起散散步','required maxlength="100"')}${U.dateTimeGroup(base)}${U.field('location','地点 <small>可选</small>','text',base.location||'','在哪里见？','maxlength="100"')}${U.field('note','想说的话 <small>可选</small>','textarea',base.note||'','说说你想一起做的事。')}<p class="quiet-note">当前时区：${esc(state.user.timezone)}。邀约必须有明确的开始和结束时间。</p><div class="inline-note">${icon('calendar',16)}${event?'对方确认修改前，原共同安排仍然有效。':'对方接受后，才会加入双方的共同日历。'} 邀约不会自动形成承诺。</div>`,v=>{
+      U.expire();if(event&&(event.status!=='CONFIRMED'||event.pendingChange||Date.parse(event.start)<=Date.now()))return '原安排已变化或已经开始，请重新查看。';
+      if(!v.title)return '请填写邀约主题。';const start=v.allDay?U.fromLocal(v.startDate+'T00:00'):U.fromLocal(v.start),end=v.allDay?U.fromLocal(addDay(v.lastDate,1)+'T00:00'):U.fromLocal(v.end);
       if(Date.parse(start)<=Date.now())return '请选择还未开始的时间。';if(Date.parse(end)<=Date.parse(start))return '结束时间需要晚于开始时间。';
       if(previous&&(previous.status!=='PENDING'||previous.sender!=='partner'))return '原邀约已发生变化，请重新查看。';
-      const invitation={id:U.uid('i'),sender:'me',title:v.title,start,end,location:v.location,note:v.note,purpose:event?'CHANGE':previous?.purpose||'CREATE',targetEventId:eventId||previous?.targetEventId||null,baseVersion:event?.version||previous?.baseVersion||null,expressionId:expressionId||previous?.expressionId||null,previousId:previousId||null,connectionId:state.connectionId,status:'PENDING',createdAt:new Date().toISOString()};
+      const invitation={id:U.uid('i'),sender:'me',title:v.title,start,end,allDay:!!v.allDay,startDate:v.allDay?v.startDate:null,endDate:v.allDay?addDay(v.lastDate,1):null,eventTimezone:state.user.timezone,location:v.location,note:v.note,purpose:event?'CHANGE':previous?.purpose||'CREATE',targetEventId:eventId||previous?.targetEventId||null,baseVersion:event?.version||previous?.baseVersion||null,expressionId:expressionId||previous?.expressionId||null,previousId:previousId||null,connectionId:state.connectionId,status:'PENDING',createdAt:new Date().toISOString()};
       if(previous)previous.status='SUPERSEDED';state.invitations.unshift(invitation);U.notify('invitation',invitation.id,invitation.purpose==='CHANGE'?'收到一份共同安排修改提案':'收到一份新邀约',state.partner.username);if(event)event.pendingChange=invitation.id;if(previous?.targetEventId){const target=U.find('events',previous.targetEventId);if(target)target.pendingChange=invitation.id;}U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
     },{draft:eventId?`change-${eventId}`:previousId?`counter-${previousId}`:'invitation-new',label:previous?'发出新提议':'发送邀约',eyebrow:'MAKE ROOM FOR US'});
+    U.bindTimeForm(document.querySelector('#dialog-form'));
   };
   U.conflicts=i=>state.events.filter(e=>(U.eventVisible(e)||(U.connected()&&e.kind==='PERSONAL'&&e.owner==='partner'&&!e.deleted))&&e.status==='CONFIRMED'&&e.id!==i.targetEventId&&Date.parse(e.start)<Date.parse(i.end)&&Date.parse(e.end)>Date.parse(i.start));
   U.inviteLabels={PENDING:'待确认',ACCEPTED:'已接受',DECLINED:'已婉拒',WITHDRAWN:'已撤回',EXPIRED:'已过期',SUPERSEDED:'已提出其他时间'};
@@ -335,10 +340,10 @@
     U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.sender!=='partner'||i.status!=='PENDING')return U.toast('邀约状态已变化，请重新查看',true);
     if(i.purpose==='CHANGE'){
       const e=U.find('events',i.targetEventId);if(!e||e.status!=='CONFIRMED'||e.version!==i.baseVersion||e.pendingChange!==i.id)return U.toast('原安排已变化，不能接受这份修改',true);
-      Object.assign(e,{title:i.title,start:i.start,end:i.end,location:i.location,note:i.note,version:e.version+1,pendingChange:null});i.eventId=e.id;
+      Object.assign(e,{title:i.title,start:i.start,end:i.end,allDay:!!i.allDay,startDate:i.startDate||null,endDate:i.endDate||null,eventTimezone:i.eventTimezone||state.user.timezone,location:i.location,note:i.note,version:e.version+1,pendingChange:null});i.eventId=e.id;
       if(e.reminder)U.notify('event',e.id,'共同安排已改期，请检查自己的提醒');
     }else{
-      const existing=state.events.find(e=>e.invitationId===i.id);if(existing)i.eventId=existing.id;else {const e={id:U.uid('e'),kind:'SHARED',title:i.title,start:i.start,end:i.end,location:i.location,note:i.note,status:'CONFIRMED',connectionId:state.connectionId,version:1,pendingChange:null,reminder:'',invitationId:i.id};state.events.push(e);i.eventId=e.id;}
+      const existing=state.events.find(e=>e.invitationId===i.id);if(existing)i.eventId=existing.id;else {const e={id:U.uid('e'),kind:'SHARED',title:i.title,start:i.start,end:i.end,allDay:!!i.allDay,startDate:i.startDate||null,endDate:i.endDate||null,eventTimezone:i.eventTimezone||state.user.timezone,location:i.location,note:i.note,status:'CONFIRMED',connectionId:state.connectionId,version:1,pendingChange:null,reminder:'',invitationId:i.id};state.events.push(e);i.eventId=e.id;}
     }
     i.status='ACCEPTED';U.notify('invitation',i.id,'对方接受了你的提议',state.partner.username);save();U.close();U.render();U.toast(i.purpose==='CHANGE'?'修改已确认，共同安排已更新':'已接受，加入共同日历');
   };

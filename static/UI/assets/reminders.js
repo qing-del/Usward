@@ -175,6 +175,19 @@
       const r = U.state.reminders.find(r => r.id===d.reminderId);
       if (!r || r.revision!==d.reminderRevision || r.status!=='FIRED' || !visibleTo(r,d.recipient) || closed(r) || person(d.recipient)?.notificationEmail!==d.recipientEmail) {d.status='CANCELLED';d.failureCode=null;changed=true;}
     });
+    U.state.notifications.forEach(n => {
+      if (n.invalidatedAt) return;
+      const type = Object.keys(kinds).find(type => kinds[type]===n.kind);
+      let accessible = !n.connectionId || n.connectionId===U.state.connectionId;
+      if (type) {
+        const item=U.find(collections[type],n.resourceId);
+        accessible &&= !!item && !item.deleted && (type==='CALENDAR_EVENT'?item.kind==='PERSONAL'?owner(item)===n.recipient:U.shared(item):owner(item)===n.recipient||(item.shared&&U.shared(item)));
+      } else if (n.kind==='expression' || n.kind==='invitation') {
+        const item=U.find(n.kind==='expression'?'expressions':'invitations',n.resourceId);
+        accessible &&= !!item && U.shared(item) && (n.kind!=='expression'||item.status!=='WITHDRAWN');
+      }
+      if (!accessible) {n.invalidatedAt=new Date().toISOString();U.cancelMailTasks(d=>d.notificationId===n.id);changed=true;}
+    });
     if (changed) U.save();
   };
   U.advanceMailPreview = () => {

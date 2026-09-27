@@ -158,7 +158,7 @@
       if (i.status !== 'PENDING') return;
       const target=i.targetEventId && U.find('events',i.targetEventId);
       const end=Math.min(Date.parse(i.start),target ? Date.parse(target.start) : Infinity);
-      if (end <= Date.now()) {i.status='EXPIRED';if(target) target.pendingChange=null;changed=true;}
+      if (end <= Date.now()) {i.status='EXPIRED';i.version=(i.version||1)+1;i.updatedAt=new Date().toISOString();if(target?.pendingChange===i.id)target.pendingChange=null;changed=true;}
     });
     if (changed) save();
   };
@@ -355,51 +355,115 @@
   U.eventDetail=id=>{
     const e=U.find('events',id);if(!e||!U.eventVisible(e))return U.toast('这个安排已不可访问',true);
     const shared=e.kind==='SHARED';const change=e.pendingChange&&U.find('invitations',e.pendingChange);
-    U.modal(e.title,`<div class="detail-meta">${U.badge(shared?'共同安排':'个人安排',shared?'green':'gray',shared?'link':'lock')}${e.offline?U.badge('由我记录，线下确认','peach'):''}${e.status==='CANCELLED'?U.badge('已取消','gray'):''}</div><p class="modal-copy">${U.formatRange(e)}</p>${e.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(e.location)}</p>`:''}${e.note?`<p class="detail-label">${shared?'共同说明':'私人备注'}</p><p class="modal-copy">${esc(e.note)}</p>`:''}${U.reminderSummary('CALENDAR_EVENT',id)}${e.status==='CANCELLED'&&e.cancelReason?`<p class="detail-label">取消说明</p><p class="modal-copy">${esc(e.cancelReason)}</p>`:''}${change&&change.status==='PENDING'?`<div class="inline-note peach mt-16">${icon('clock',16)}有一份待确认的改期提案，原安排保持有效。</div><button class="text-link mt-8" data-action="invite-view" data-id="${change.id}">查看修改提案 ${icon('arrow',14)}</button>`:''}${shared&&e.status!=='CANCELLED'?'<p class="quiet-note mt-16">共同内容的修改需要另一方确认；双方分别设置私人提醒，时间、方式与邮箱互不可见。</p>':''}<div class="detail-footer">${e.status!=='CANCELLED'?`${U.act('event-reminder',id,icon('bell',14)+'我的提醒','btn soft')}${shared?`${!change&&Date.parse(e.start)>Date.now()?U.act('event-change',id,'提出修改','btn secondary'):''}${U.act('event-cancel',id,'取消共同安排','text-link danger')}`:`${U.act('event-edit',id,'编辑安排','btn secondary')}${U.act('event-delete',id,'删除','text-link danger')}`}`:'<p class="quiet-note">取消已生效，待处理的修改提案也已撤销。</p>'}</div>`,{eyebrow:shared?'TIME TOGETHER':'MY CALENDAR'});
+    U.modal(e.title,`<div class="detail-meta">${U.badge(shared?'共同安排':'个人安排',shared?'green':'gray',shared?'link':'lock')}${e.offline?U.badge('由我记录，线下确认','peach'):''}${e.status==='CANCELLED'?U.badge('已取消','gray'):''}</div><p class="modal-copy">${U.formatRange(e)}</p>${e.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(e.location)}</p>`:''}${e.note?`<p class="detail-label">${shared?'共同说明':'私人备注'}</p><p class="modal-copy">${esc(e.note)}</p>`:''}${U.reminderSummary('CALENDAR_EVENT',id)}${U.notificationSettingHTML('CALENDAR_EVENT',id)}${e.status==='CANCELLED'&&e.cancelReason?`<p class="detail-label">取消说明</p><p class="modal-copy">${esc(e.cancelReason)}</p>`:''}${change&&change.status==='PENDING'?`<div class="inline-note peach mt-16">${icon('clock',16)}有一份待确认的改期提案，原安排保持有效。</div><button class="text-link mt-8" data-action="invite-view" data-id="${change.id}">查看修改提案 ${icon('arrow',14)}</button>`:''}${shared&&e.status!=='CANCELLED'?'<p class="quiet-note mt-16">共同内容的修改需要另一方确认；双方分别设置私人提醒，时间、方式与邮箱互不可见。</p>':''}<div class="detail-footer">${U.act('commitment-from-event',id,'写下我的下一步')}${e.status!=='CANCELLED'?`${U.act('event-reminder',id,icon('bell',14)+'我的提醒','btn soft')}${shared?`${!change&&Date.parse(e.start)>Date.now()?U.act('event-change',id,'提出修改','btn secondary'):''}${U.act('event-cancel',id,'取消共同安排','text-link danger')}`:`${U.act('event-edit',id,'编辑安排','btn secondary')}${U.act('event-delete',id,'删除','text-link danger')}`}`:'<p class="quiet-note">取消已生效，待处理的修改提案也已撤销。</p>'}</div>`,{eyebrow:shared?'TIME TOGETHER':'MY CALENDAR'});
   };
   U.actions['event-new']=()=>U.eventForm();U.actions['event-edit']=({id})=>U.eventForm(id);U.actions['event-view']=({id})=>U.eventDetail(id);
   U.actions['event-reminder']=({id})=>U.reminderForm('CALENDAR_EVENT',id);
   U.actions['event-delete']=({id})=>{const e=U.find('events',id);if(!e||e.kind!=='PERSONAL'||e.owner!=='me')return;U.confirm('删除个人安排？','这条个人安排及其提醒将被移除，尚未完成的邮件任务会取消。','删除安排',()=>{U.cancelResourceReminders('CALENDAR_EVENT',id);e.deleted=true;e.reminder='';save();U.close();U.render();U.toast('个人安排已删除');},true);};
   U.actions['event-change']=({id})=>U.inviteForm({eventId:id});
-  U.actions['event-cancel']=({id})=>{const e=U.find('events',id);if(!e||e.kind!=='SHARED'||!U.shared(e)||e.status==='CANCELLED')return;U.form('取消这次共同安排',`${U.field('reason','取消说明 <small>可选</small>','textarea','','可以留一句话，让对方知道。')}<div class="inline-note peach">${icon('info',16)}确认后立即取消，无需对方批准；待处理的修改提案、双方提醒与未完成的邮件任务会取消。</div>`,v=>{U.cancelResourceReminders('CALENDAR_EVENT',id);e.status='CANCELLED';e.cancelReason=v.reason;e.reminder='';e.privateReminders={};U.notify('event',id,'对方取消了一次共同安排',state.partner.username);if(e.pendingChange){const i=U.find('invitations',e.pendingChange);if(i)i.status='WITHDRAWN';e.pendingChange=null;}U.toast('共同安排已取消');},{label:'确认取消',eyebrow:'CHANGE OF PLANS'});};
+  U.actions['event-cancel']=({id})=>{
+    const e=U.find('events',id);if(!e||e.kind!=='SHARED'||!U.shared(e)||e.status==='CANCELLED')return;
+    U.form('取消这次共同安排',`${U.field('reason','取消说明 <small>可选</small>','textarea','','可以留一句话，让对方知道。')}<div class="inline-note peach">${icon('info',16)}确认后立即取消，无需对方批准；待处理的修改提案与双方私人提醒任务会清理。</div>${U.followUpNotificationFields('CALENDAR_EVENT',id)}`,(v,form)=>{
+      const error=U.submitNotified(form,v,{action:'event-cancel',resourceType:'CALENDAR_EVENT',id,followUp:true,message:'对方取消了一次共同安排',validate:()=>U.find('events',id).status==='CONFIRMED'?null:'共同安排已经取消，请查看最新记录。'},()=>{
+        const current=U.find('events',id);U.cancelResourceReminders('CALENDAR_EVENT',id);current.status='CANCELLED';current.cancelReason=v.reason;current.reminder='';current.privateReminders={};current.version+=1;current.updatedAt=new Date().toISOString();
+        if(current.pendingChange){const proposal=U.find('invitations',current.pendingChange);if(proposal){proposal.status='WITHDRAWN';proposal.version+=1;}current.pendingChange=null;}
+        return {type:'CALENDAR_EVENT',id};
+      });if(error)return error;U.toast('共同安排已取消');
+    },{label:'确认取消',eyebrow:'CHANGE OF PLANS'});
+  };
+  U.actions['commitment-from-event']=({id})=>U.commitmentForm(null,{sourceType:'event',sourceId:id});
 
   /* Invitations are proposals, not events, until the receiver accepts. */
   U.inviteForm=({expressionId='',eventId='',previousId=''}={})=>{
-    if(!U.connected())return U.connectionRequired();
-    const event=eventId&&U.find('events',eventId);const previous=previousId&&U.find('invitations',previousId);const base=event||previous||{};
-    if(event&&(event.pendingChange||Date.parse(event.start)<=Date.now()))return U.toast('请先处理已有提案，或选择未来的共同安排',true);
-    U.form(event?'商量一下新的安排':previous?'提议另一个时间':'留一段一起的时间',`${U.field('title','邀约主题 <span class="coral">*</span>','text',base.title||'','例如：一起散散步','required maxlength="100"')}${U.dateTimeGroup(base)}${U.field('location','地点 <small>可选</small>','text',base.location||'','在哪里见？','maxlength="100"')}${U.field('note','想说的话 <small>可选</small>','textarea',base.note||'','说说你想一起做的事。')}<p class="quiet-note">当前时区：${esc(state.user.timezone)}。邀约必须有明确的开始和结束时间。</p><div class="inline-note">${icon('calendar',16)}${event?'对方确认修改前，原共同安排仍然有效。':'对方接受后，才会加入双方的共同日历。'} 邀约不会自动形成承诺。</div>`,v=>{
-      U.expire();if(event&&(event.status!=='CONFIRMED'||event.pendingChange||Date.parse(event.start)<=Date.now()))return '原安排已变化或已经开始，请重新查看。';
-      if(!v.title)return '请填写邀约主题。';const start=v.allDay?U.fromLocal(v.startDate+'T00:00'):U.fromLocal(v.start),end=v.allDay?U.fromLocal(addDay(v.lastDate,1)+'T00:00'):U.fromLocal(v.end);
-      if(Date.parse(start)<=Date.now())return '请选择还未开始的时间。';if(Date.parse(end)<=Date.parse(start))return '结束时间需要晚于开始时间。';
-      if(previous&&(previous.status!=='PENDING'||previous.sender!=='partner'))return '原邀约已发生变化，请重新查看。';
-      const invitation={id:U.uid('i'),sender:'me',title:v.title,start,end,allDay:!!v.allDay,startDate:v.allDay?v.startDate:null,endDate:v.allDay?addDay(v.lastDate,1):null,eventTimezone:state.user.timezone,location:v.location,note:v.note,purpose:event?'CHANGE':previous?.purpose||'CREATE',targetEventId:eventId||previous?.targetEventId||null,baseVersion:event?.version||previous?.baseVersion||null,expressionId:expressionId||previous?.expressionId||null,previousId:previousId||null,connectionId:state.connectionId,status:'PENDING',createdAt:new Date().toISOString()};
-      if(previous)previous.status='SUPERSEDED';state.invitations.unshift(invitation);U.notify('invitation',invitation.id,invitation.purpose==='CHANGE'?'收到一份共同安排修改提案':'收到一份新邀约',state.partner.username);if(event)event.pendingChange=invitation.id;if(previous?.targetEventId){const target=U.find('events',previous.targetEventId);if(target)target.pendingChange=invitation.id;}U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
+    if(!U.connected())return U.connectionRequired();U.expire();
+    const event=eventId&&U.find('events',eventId),previous=previousId&&U.find('invitations',previousId),base=event||previous||{};
+    if(event&&(!U.shared(event)||event.kind!=='SHARED'||event.status!=='CONFIRMED'||event.pendingChange||Date.parse(event.start)<=Date.now()))return U.toast('请先处理已有提案，或选择未来的共同安排',true);
+    if(previous&&(!U.shared(previous)||previous.status!=='PENDING'||previous.sender!=='partner'))return U.toast('原提案已不可协商，请重新查看',true);
+    const type=event?'CALENDAR_EVENT':'CALENDAR_INVITATION',id=eventId||previousId;
+    const notificationFields=previous?U.followUpNotificationFields(type,id):U.notificationPlanFields(type,id,event?{fromType:'CALENDAR_EVENT',fromId:eventId}:{});
+    U.form(event?'商量一下新的安排':previous?'提议另一个时间':'留一段一起的时间',`${U.field('title','邀约主题 <span class="coral">*</span>','text',base.title||'','例如：一起散散步','required maxlength="100"')}${U.dateTimeGroup(base)}${U.field('location','地点 <small>可选</small>','text',base.location||'','在哪里见？','maxlength="100"')}${U.field('note','想说的话 <small>可选</small>','textarea',base.note||'','说说你想一起做的事。')}<p class="quiet-note">当前时区：${esc(state.user.timezone)}。邀约必须有明确的开始和结束时间。</p><div class="inline-note">${icon('calendar',16)}${event?'对方确认修改前，原共同安排仍然有效。':'对方接受后，才会加入双方的共同日历。'} 邀约不会自动形成承诺。</div>${notificationFields}`,(v,form)=>{
+      if(!v.title)return '请填写邀约主题。';
+      const start=v.allDay?U.fromLocal(v.startDate+'T00:00'):U.fromLocal(v.start),end=v.allDay?U.fromLocal(addDay(v.lastDate,1)+'T00:00'):U.fromLocal(v.end);
+      const validate=()=>{
+        if(!start||!end||Date.parse(start)<=Date.now())return '请选择还未开始的时间。';if(Date.parse(end)<=Date.parse(start))return '结束时间需要晚于开始时间。';
+        U.expire();const currentEvent=eventId&&U.find('events',eventId),currentPrevious=previousId&&U.find('invitations',previousId);
+        if(currentEvent&&(currentEvent.status!=='CONFIRMED'||currentEvent.pendingChange||Date.parse(currentEvent.start)<=Date.now()))return '原安排已变化或已经开始，请重新查看。';
+        if(currentPrevious&&(currentPrevious.status!=='PENDING'||currentPrevious.sender!=='partner'))return '原邀约已发生变化，请重新查看。';
+        if(currentPrevious?.targetEventId){const target=U.find('events',currentPrevious.targetEventId);if(!target||target.status!=='CONFIRMED'||target.version!==currentPrevious.baseVersion||target.pendingChange!==previousId||Date.parse(target.start)<=Date.now())return '原共同安排已变化或开始，请重新查看。';}
+        const sourceId=expressionId||currentPrevious?.expressionId;if(sourceId){const source=U.find('expressions',sourceId);if(!source||!U.shared(source)||source.status==='WITHDRAWN')return '关联表达已不可访问，请重新发起邀约。';}
+        return null;
+      };
+      const error=U.submitNotified(form,v,{action:previous?'invite-counter':event?'event-proposal':'invite-create',resourceType:type,id:id||undefined,followUp:!!previous,notificationPlan:previous?undefined:{outgoingMode:v.outgoingMode,followUpMode:v.followUpMode},inheritFrom:event?{type:'CALENDAR_EVENT',id:eventId}:undefined,message:previous?'收到一份替代提议':event?'收到一份共同安排修改提案':'收到一份新邀约',validate},()=>{
+        const currentEvent=eventId&&U.find('events',eventId),currentPrevious=previousId&&U.find('invitations',previousId),now=new Date().toISOString();
+        const invitation={id:U.uid('i'),sender:'me',title:v.title,start,end,allDay:!!v.allDay,startDate:v.allDay?v.startDate:null,endDate:v.allDay?addDay(v.lastDate,1):null,eventTimezone:state.user.timezone,location:v.location,note:v.note,purpose:event?'CHANGE':currentPrevious?.purpose||'CREATE',targetEventId:eventId||currentPrevious?.targetEventId||null,baseVersion:currentEvent?.version||currentPrevious?.baseVersion||null,expressionId:expressionId||currentPrevious?.expressionId||null,previousId:previousId||null,connectionId:state.connectionId,status:'PENDING',createdAt:now,updatedAt:now,version:1};
+        state.invitations.unshift(invitation);
+        if(currentPrevious){U.copyNotificationSettings('CALENDAR_INVITATION',previousId,'CALENDAR_INVITATION',invitation.id);currentPrevious.status='SUPERSEDED';currentPrevious.version+=1;currentPrevious.updatedAt=now;}
+        const target=invitation.targetEventId&&U.find('events',invitation.targetEventId);if(target)target.pendingChange=invitation.id;
+        return {type:'CALENDAR_INVITATION',id:invitation.id};
+      });if(error)return error;U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
     },{draft:eventId?`change-${eventId}`:previousId?`counter-${previousId}`:'invitation-new',label:previous?'发出新提议':'发送邀约',eyebrow:'MAKE ROOM FOR US'});
     U.bindTimeForm(document.querySelector('#dialog-form'));
   };
-  U.conflicts=i=>state.events.filter(e=>(U.eventVisible(e)||(U.connected()&&e.kind==='PERSONAL'&&e.owner==='partner'&&!e.deleted))&&e.status==='CONFIRMED'&&e.id!==i.targetEventId&&Date.parse(e.start)<Date.parse(i.end)&&Date.parse(e.end)>Date.parse(i.start));
+  U.conflicts=i=>{
+    if(!i||!U.shared(i))return [];
+    const start=Date.parse(i.start),end=Date.parse(i.end);
+    const intervals=state.events.filter(e=>!e.deleted&&e.status==='CONFIRMED'&&e.id!==i.targetEventId&&(e.kind==='SHARED'?U.shared(e):['BUSY','NEGOTIABLE'].includes(e.availability))).map(e=>({start:Math.max(start,Date.parse(e.start)),end:Math.min(end,Date.parse(e.end))})).filter(x=>x.start<x.end).sort((a,b)=>a.start-b.start||a.end-b.end);
+    const merged=[];intervals.forEach(x=>{const last=merged.at(-1);if(last&&x.start<=last.end)last.end=Math.max(last.end,x.end);else merged.push({...x});});
+    return merged.map(x=>({start:new Date(x.start).toISOString(),end:new Date(x.end).toISOString()}));
+  };
   U.inviteLabels={PENDING:'待确认',ACCEPTED:'已接受',DECLINED:'已婉拒',WITHDRAWN:'已撤回',EXPIRED:'已过期',SUPERSEDED:'已提出其他时间'};
   U.inviteDetail=id=>{
     U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i))return U.toast('这份邀约已不可访问',true);
-    const incoming=i.sender==='partner';const target=i.targetEventId&&U.find('events',i.targetEventId);const conflicts=U.conflicts(i);
-    U.modal(i.purpose==='CHANGE'?'共同安排修改提案':i.title,`<div class="detail-meta">${U.avatar(i.sender,'small')}<small class="muted">${esc(U.person(i.sender))} 的${i.purpose==='CHANGE'?'修改提案':'邀约'}</small>${U.badge(U.inviteLabels[i.status],i.status==='PENDING'?'peach':'gray')}</div>${target?`<div class="card soft"><p class="quiet-note">原安排 · 在接受修改前保持有效</p><h3 class="mt-8">${esc(target.title)}</h3><p class="quiet-note mt-8">${U.formatRange(target)}</p></div><p class="detail-label">提议改为</p><h3>${esc(i.title)}</h3>`:''}<p class="modal-copy mt-8">${U.formatRange(i)}</p>${i.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(i.location)}</p>`:''}${i.note?`<p class="modal-copy mt-16">${esc(i.note)}</p>`:''}${i.status==='PENDING'&&conflicts.length?`<div class="inline-note peach mt-16">${icon('info',16)}时间有重叠：${conflicts.map(e=>`${U.date(e.start)} ${U.time(e.start)}–${U.time(e.end)}`).join('、')}。接受前可以再确认一下。</div>`:''}${i.previousId?'<p class="quiet-note mt-16">这是一次替代提议，原提案已结束；新的接收者需要再次确认。</p>':''}<div class="detail-footer">${i.status==='PENDING'?incoming?`${U.act('invite-accept',id,i.purpose==='CHANGE'?'接受修改':'接受邀约','btn primary')}${U.act('invite-counter',id,'商量其他时间','btn secondary')}${U.act('invite-decline',id,'婉拒')}`:`${U.act('invite-withdraw',id,'撤回邀约','btn secondary')}<p class="quiet-note">等待对方确认；不自动接受。</p>`:i.eventId?U.act('event-view',i.eventId,'查看共同安排','btn soft'):'<p class="quiet-note">这份提案已经结束。</p>'}</div>`,{eyebrow:'AN INVITATION'});
+    const incoming=i.sender==='partner',target=i.targetEventId&&U.find('events',i.targetEventId),conflicts=U.conflicts(i);
+    U.modal(i.purpose==='CHANGE'?'共同安排修改提案':i.title,`<div class="detail-meta">${U.avatar(i.sender,'small')}<small class="muted">${esc(U.person(i.sender))} 的${i.purpose==='CHANGE'?'修改提案':'邀约'}</small>${U.badge(U.inviteLabels[i.status],i.status==='PENDING'?'peach':'gray')}</div>${target?`<div class="card soft"><p class="quiet-note">原安排 · 在接受修改前保持有效</p><h3 class="mt-8">${esc(target.title)}</h3><p class="quiet-note mt-8">${U.formatRange(target)}</p></div><p class="detail-label">提议改为</p><h3>${esc(i.title)}</h3>`:''}<p class="modal-copy mt-8">${U.formatRange(i)}</p>${i.location?`<p class="modal-copy mt-8">${icon('pin',15)} ${esc(i.location)}</p>`:''}${i.note?`<p class="modal-copy mt-16">${esc(i.note)}</p>`:''}${U.notificationSettingHTML('CALENDAR_INVITATION',id)}${i.status==='PENDING'&&conflicts.length?`<div class="inline-note peach mt-16">${icon('info',16)}时间有重叠：${conflicts.map(e=>U.formatRange(e)).join('、')}。只展示重叠时段；接受前请确认。</div>`:''}${i.previousId?'<p class="quiet-note mt-16">这是一次替代提议，原提案已结束；新的接收者需要再次确认。</p>':''}<div class="detail-footer">${i.status==='PENDING'?incoming?`${U.act('invite-accept',id,i.purpose==='CHANGE'?'接受修改':'接受邀约','btn primary')}${U.act('invite-counter',id,'商量其他时间','btn secondary')}${U.act('invite-decline',id,'婉拒')}`:`${U.act('invite-withdraw',id,'撤回邀约','btn secondary')}<p class="quiet-note">等待对方确认；不自动接受。</p>`:i.eventId?U.act('event-view',i.eventId,'查看共同安排','btn soft'):'<p class="quiet-note">这份提案已经结束。</p>'}</div>`,{eyebrow:'AN INVITATION'});
   };
-  U.acceptInvite=id=>{
-    U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.sender!=='partner'||i.status!=='PENDING')return U.toast('邀约状态已变化，请重新查看',true);
-    if(i.purpose==='CHANGE'){
-      const e=U.find('events',i.targetEventId);if(!e||e.status!=='CONFIRMED'||e.version!==i.baseVersion||e.pendingChange!==i.id)return U.toast('原安排已变化，不能接受这份修改',true);
-      Object.assign(e,{title:i.title,start:i.start,end:i.end,allDay:!!i.allDay,startDate:i.startDate||null,endDate:i.endDate||null,eventTimezone:i.eventTimezone||state.user.timezone,location:i.location,note:i.note,version:e.version+1,pendingChange:null});i.eventId=e.id;
-      state.reminders.filter(r=>r.resourceType==='CALENDAR_EVENT'&&r.resourceId===e.id&&r.status==='PENDING').forEach(r=>U.notify('event',e.id,'共同安排已改期，请检查自己的提醒',r.recipient));
-    }else{
-      const existing=state.events.find(e=>e.invitationId===i.id);if(existing)i.eventId=existing.id;else {const e={id:U.uid('e'),kind:'SHARED',title:i.title,start:i.start,end:i.end,allDay:!!i.allDay,startDate:i.startDate||null,endDate:i.endDate||null,eventTimezone:i.eventTimezone||state.user.timezone,location:i.location,note:i.note,status:'CONFIRMED',connectionId:state.connectionId,version:1,pendingChange:null,reminder:'',invitationId:i.id};state.events.push(e);i.eventId=e.id;}
-    }
-    i.status='ACCEPTED';U.notify('invitation',i.id,'对方接受了你的提议',state.partner.username);save();U.close();U.render();U.toast(i.purpose==='CHANGE'?'修改已确认，共同安排已更新':'已接受，加入共同日历');
+  const conflictTokens=new Map();
+  const conflictContext=(i,conflicts)=>JSON.stringify([state.user.username,i.id,i.version,U.find('events',i.targetEventId)?.version||null,conflicts]);
+  const conflictHTML=conflicts=>conflicts.length?`<div class="inline-note peach">${icon('info',16)}以下时段与已有安排重叠：<br>${conflicts.map(x=>U.formatRange(x)).join('<br>')}</div><label class="checkbox-label"><input type="checkbox" name="confirmConflicts">我已查看这些重叠时段，仍然接受</label>`:'<p class="quiet-note">当前没有重叠时段。提交时会再次检查。</p>';
+  const grantConflicts=(form,i,conflicts)=>{const token=U.operationKey();conflictTokens.set(token,{context:conflictContext(i,conflicts),expiresAt:Date.now()+120000});form.dataset.conflictToken=token;};
+  U.acceptInvite=(id,form=null,values={})=>{
+    U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.sender!=='partner')return '邀约已不可接受，请重新查看。';
+    if(i.status==='ACCEPTED'){U.toast('已接受，当前共同安排可在详情查看');return null;}
+    const validate=()=>{
+      U.expire();const current=U.find('invitations',id);if(current.status!=='PENDING')return '邀约状态已变化或已过期，请重新查看。';
+      if(current.purpose==='CHANGE'){const event=U.find('events',current.targetEventId);if(!event||event.status!=='CONFIRMED'||event.version!==current.baseVersion||event.pendingChange!==id)return '原安排已变化，不能接受这份修改。';}
+      const conflicts=U.conflicts(current),grant=form&&conflictTokens.get(form.dataset.conflictToken);
+      if(conflicts.length&&(!values.confirmConflicts||!grant||grant.expiresAt<=Date.now()||grant.context!==conflictContext(current,conflicts))){
+        if(form){grantConflicts(form,current,conflicts);const block=form.querySelector('.conflict-preview');if(block)block.innerHTML=conflictHTML(conflicts);}
+        return '请查看最新的重叠时段，明确勾选仍然接受后再提交。';
+      }return null;
+    };
+    const mutate=()=>{
+      const current=U.find('invitations',id),now=new Date().toISOString();
+      if(current.purpose==='CHANGE'){
+        const event=U.find('events',current.targetEventId);Object.assign(event,{title:current.title,start:current.start,end:current.end,allDay:!!current.allDay,startDate:current.startDate||null,endDate:current.endDate||null,eventTimezone:current.eventTimezone||state.user.timezone,location:current.location,note:current.note,version:event.version+1,updatedAt:now,pendingChange:null});current.eventId=event.id;
+      }else{
+        let event=state.events.find(e=>e.invitationId===id);
+        if(!event){event={id:U.uid('e'),kind:'SHARED',title:current.title,start:current.start,end:current.end,allDay:!!current.allDay,startDate:current.startDate||null,endDate:current.endDate||null,eventTimezone:current.eventTimezone||state.user.timezone,location:current.location,note:current.note,status:'CONFIRMED',connectionId:state.connectionId,version:1,createdAt:now,updatedAt:now,pendingChange:null,reminder:'',invitationId:id};state.events.push(event);U.copyNotificationSettings('CALENDAR_INVITATION',id,'CALENDAR_EVENT',event.id);}current.eventId=event.id;
+      }
+      current.status='ACCEPTED';current.version+=1;current.updatedAt=now;
+      if(current.purpose==='CHANGE')U.reminderCheckNotifications(current.eventId,id);
+      return {type:'CALENDAR_INVITATION',id,eventId:current.eventId};
+    };
+    const options={action:'invite-accept',resourceType:'CALENDAR_INVITATION',id,followUp:true,message:'对方接受了你的提议',validate};
+    const error=form?U.submitNotified(form,values,options,mutate):(()=>{const result=U.runNotifiedOperation({...options,key:U.operationKey(),expectedVersion:i.version,payload:values},mutate);return result.ok?null:result.error.message;})();
+    if(error)return error;U.toast(i.purpose==='CHANGE'?'修改已确认，共同安排已更新':'已接受，加入共同日历');return null;
   };
   U.actions['invite-new']=()=>U.inviteForm();U.actions['invite-view']=({id})=>U.inviteDetail(id);
-  U.actions['invite-accept']=({id})=>{const i=U.find('invitations',id);if(!i)return;const conflicts=U.conflicts(i);if(conflicts.length)U.confirm('时间有重叠，仍然接受？',`以下时段与现有安排重叠：\n${conflicts.map(e=>`${U.date(e.start)} ${U.time(e.start)}–${U.time(e.end)}`).join('\n')}\n\n你可以明确确认仍然接受，也可以返回商量其他时间。`,'仍然接受',()=>U.acceptInvite(id));else U.acceptInvite(id);};
-  U.endInvite=(id,status)=>{U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.status!=='PENDING')return U.toast('这份提案已经结束',true);if(status==='WITHDRAWN'?i.sender!=='me':i.sender!=='partner')return;if(i.targetEventId){const e=U.find('events',i.targetEventId);if(e?.pendingChange===i.id)e.pendingChange=null;}i.status=status;U.notify('invitation',i.id,status==='DECLINED'?'对方婉拒了你的提议':'对方撤回了一份提议',state.partner.username);save();U.close();U.render();U.toast(status==='DECLINED'?'已婉拒，原安排不会改变':'提案已撤回');};
-  U.actions['invite-decline']=({id})=>U.endInvite(id,'DECLINED');U.actions['invite-withdraw']=({id})=>U.confirm('撤回这份邀约？','撤回后对方不能再接受；已有共同安排保持不变。','撤回邀约',()=>U.endInvite(id,'WITHDRAWN'));U.actions['invite-counter']=({id})=>U.inviteForm({previousId:id});
+  U.actions['invite-accept']=({id})=>{
+    U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.sender!=='partner')return;if(i.status==='ACCEPTED')return U.eventDetail(i.eventId);if(i.status!=='PENDING')return U.toast('这份提案已结束',true);
+    const conflicts=U.conflicts(i),form=U.form(i.purpose==='CHANGE'?'确认接受这份修改':'确认接受邀约',`<h3>${esc(i.title)}</h3><p class="modal-copy">${U.formatRange(i)}</p><div class="conflict-preview">${conflictHTML(conflicts)}</div>${U.followUpNotificationFields('CALENDAR_INVITATION',id)}`,(values,node)=>U.acceptInvite(id,node,values),{label:i.purpose==='CHANGE'?'接受修改':'接受邀约',eyebrow:'CONFIRM OUR TIME'});
+    grantConflicts(form,i,conflicts);
+  };
+  U.endInvite=(id,status)=>{
+    U.expire();const i=U.find('invitations',id);if(!i||!U.shared(i)||i.status!=='PENDING')return U.toast('这份提案已经结束',true);if(status==='WITHDRAWN'?i.sender!=='me':i.sender!=='partner')return;
+    U.form(status==='DECLINED'?'婉拒这份提议':'撤回这份邀约',`<h3>${esc(i.title)}</h3><p class="quiet-note">${status==='DECLINED'?'婉拒后原共同安排保持有效。':'撤回后对方不能再接受；已有共同安排保持不变。'}</p>${U.followUpNotificationFields('CALENDAR_INVITATION',id)}`,(v,form)=>{
+      const error=U.submitNotified(form,v,{action:status==='DECLINED'?'invite-decline':'invite-withdraw',resourceType:'CALENDAR_INVITATION',id,followUp:true,message:status==='DECLINED'?'对方婉拒了你的提议':'对方撤回了一份提议',validate:()=>{U.expire();return U.find('invitations',id).status==='PENDING'?null:'这份提案已经结束，请重新查看。';}},()=>{
+        const current=U.find('invitations',id);if(current.targetEventId){const event=U.find('events',current.targetEventId);if(event?.pendingChange===id)event.pendingChange=null;}current.status=status;current.version+=1;current.updatedAt=new Date().toISOString();return {type:'CALENDAR_INVITATION',id};
+      });if(error)return error;U.toast(status==='DECLINED'?'已婉拒，原安排不会改变':'提案已撤回');
+    },{label:status==='DECLINED'?'确认婉拒':'撤回邀约',eyebrow:'CHANGE OF PLANS'});
+  };
+  U.actions['invite-decline']=({id})=>U.endInvite(id,'DECLINED');U.actions['invite-withdraw']=({id})=>U.endInvite(id,'WITHDRAWN');U.actions['invite-counter']=({id})=>U.inviteForm({previousId:id});
 
   /* Commitments belong to the person who will fulfill them. */
   U.commitmentForm=(id=null,source={})=>{

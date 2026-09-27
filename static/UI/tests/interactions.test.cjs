@@ -122,3 +122,89 @@ test('archived shared memory stays accessible to reader and every comment remain
   U.view.memories={tab:'partner',category:'all',tag:'',search:'',limit:9};
   assert.match(U.pages.memories(),/忙的时候，先发一条消息/);
 });
+
+const invitationValues={title:'邀约测试',allDay:false,start:'2026-10-01T10:00',end:'2026-10-01T11:00',location:'',note:'',outgoingMode:'NONE',followUpMode:'IN_APP_AND_MAIL'};
+test('CREATE invitation starts fresh from expression; accept copies current modes and stays idempotent after cancellation',()=>{
+  const env=preview(),{U}=env;available(U);U.putNotificationSetting('EXPRESSION','x2','NONE',null);
+  U.inviteForm({expressionId:'x2'});assert.equal((env.form.html.match(/value="IN_APP" selected/g)||[]).length,2);
+  env.submit(invitationValues);const id=U.state.invitations[0].id;
+  assert.equal(U.state.notifications.filter(n=>n.resourceId===id).length,0);
+  U.putNotificationSetting('CALENDAR_INVITATION',id,'NONE',U.myNotificationSetting('CALENDAR_INVITATION',id).version);
+  U.switchAccount('chenyu');U.putNotificationSetting('CALENDAR_INVITATION',id,'IN_APP_AND_MAIL',null);
+  U.actions['invite-accept']({id});assert.equal(env.submit({}),null);
+  const eventId=U.find('invitations',id).eventId;
+  assert.equal(U.myNotificationSetting('CALENDAR_EVENT',eventId).followUpMode,'IN_APP_AND_MAIL');
+  U.switchAccount('linan');assert.equal(U.myNotificationSetting('CALENDAR_EVENT',eventId).followUpMode,'NONE');
+  U.actions['event-cancel']({id:eventId});env.submit({reason:'取消示例'});U.switchAccount('chenyu');
+  const n=U.state.notifications.length;assert.equal(U.acceptInvite(id),null);
+  assert.equal(U.find('events',eventId).status,'CANCELLED');assert.equal(U.state.notifications.length,n);
+  assert.equal(U.state.events.filter(e=>e.invitationId===id).length,1);
+});
+
+test('counter reverses roles, copies settings by username and sends one replacement notification',()=>{
+  const env=preview(),{U}=env;available(U);U.inviteForm();env.submit(invitationValues);
+  const original=U.state.invitations[0].id;U.switchAccount('chenyu');U.putNotificationSetting('CALENDAR_INVITATION',original,'NONE',null);
+  U.inviteForm({previousId:original});assert.doesNotMatch(env.form.html,/name="followUpMode"/);
+  assert.equal(env.submit({...invitationValues,start:'2026-10-02T10:00',end:'2026-10-02T11:00'}),undefined);
+  const replacement=U.state.invitations[0];assert.equal(replacement.previousId,original);assert.equal(replacement.sender,'me');
+  assert.equal(U.find('invitations',original).status,'SUPERSEDED');
+  assert.equal(U.myNotificationSetting('CALENDAR_INVITATION',replacement.id).followUpMode,'NONE');
+  assert.equal(U.state.notifications.filter(n=>n.resourceId===replacement.id&&n.sourceType==='BUSINESS').length,1);
+  U.switchAccount('linan');assert.equal(U.myNotificationSetting('CALENDAR_INVITATION',replacement.id).followUpMode,'IN_APP_AND_MAIL');
+  assert.equal(U.state.mailDeliveries.filter(d=>d.recipient==='linan').length,1);
+});
+
+test('CHANGE initializes from event but acceptance preserves newer event settings and sends checks independently',()=>{
+  const env=preview(),{U}=env;available(U);const e=U.find('events','e2');e.start=U.fromLocal('2026-10-03T08:00');e.end=U.fromLocal('2026-10-03T09:00');
+  U.putNotificationSetting('CALENDAR_EVENT',e.id,'IN_APP_AND_MAIL',null);U.saveReminder('CALENDAR_EVENT',e.id,{reminder:'2026-10-02T08:00',deliveryMode:'IN_APP_AND_MAIL'});
+  U.switchAccount('chenyu');U.putNotificationSetting('CALENDAR_EVENT',e.id,'NONE',null);U.saveReminder('CALENDAR_EVENT',e.id,{reminder:'2026-10-02T09:00',deliveryMode:'IN_APP'});U.switchAccount('linan');
+  U.inviteForm({eventId:e.id});assert.match(env.form.html,/value="NONE" selected/);assert.match(env.form.html,/value="IN_APP_AND_MAIL" selected/);
+  const version=e.version;env.submit({...invitationValues,start:'2026-10-04T08:00',end:'2026-10-04T09:00'});const id=U.state.invitations[0].id;
+  assert.equal(e.version,version);assert.equal(e.start,U.fromLocal('2026-10-03T08:00'));
+  U.putNotificationSetting('CALENDAR_EVENT',e.id,'NONE',U.myNotificationSetting('CALENDAR_EVENT',e.id).version);
+  U.switchAccount('chenyu');U.putNotificationSetting('CALENDAR_EVENT',e.id,'IN_APP',U.myNotificationSetting('CALENDAR_EVENT',e.id).version);
+  const reminders=JSON.stringify(U.state.reminders.filter(r=>r.resourceId===e.id));U.actions['invite-accept']({id});assert.equal(env.submit({}),null);
+  assert.equal(e.version,version+1);assert.equal(U.myNotificationSetting('CALENDAR_EVENT',e.id).followUpMode,'IN_APP');
+  assert.equal(JSON.stringify(U.state.reminders.filter(r=>r.resourceId===e.id)),reminders);
+  assert.equal(U.state.notifications.filter(n=>n.resourceId===id&&n.sourceType==='BUSINESS').length,1);
+  assert.equal(U.state.notifications.filter(n=>n.resourceId===e.id&&n.sourceType==='REMINDER_CHECK').length,2);
+  U.switchAccount('linan');assert.equal(U.myNotificationSetting('CALENDAR_EVENT',e.id).followUpMode,'NONE');
+});
+
+test('event cancellation preserves business mail, clears reminder mail and pending change',()=>{
+  const env=preview(),{U}=env;available(U);const e=U.find('events','e2');e.start=U.fromLocal('2026-10-03T08:00');
+  U.switchAccount('chenyu');U.putNotificationSetting('CALENDAR_EVENT',e.id,'IN_APP_AND_MAIL',null);U.switchAccount('linan');
+  U.saveReminder('CALENDAR_EVENT',e.id,{reminder:'2026-09-27T08:00',deliveryMode:'IN_APP_AND_MAIL'});U.refreshReminders();
+  U.inviteForm({eventId:e.id});env.submit(invitationValues);const proposal=U.state.invitations[0];
+  U.actions['event-cancel']({id:e.id});assert.equal(env.submit({reason:'双方可读取的取消说明'}),undefined);
+  assert.equal(proposal.status,'WITHDRAWN');assert.equal(e.pendingChange,null);
+  assert.equal(U.state.mailDeliveries.find(d=>d.sourceType==='REMINDER_DUE').status,'CANCELLED');
+  assert.equal(U.state.mailDeliveries.filter(d=>d.sourceType==='BUSINESS').at(-1).status,'QUEUED');
+  U.switchAccount('chenyu');U.eventDetail(e.id);assert.match(env.modal.html,/双方可读取的取消说明/);assert.match(env.modal.html,/保留历史设置/);
+});
+
+test('conflicts are clipped and merged without ownership, FREE, private title or real IDs',()=>{
+  const {U}=preview();const i=U.find('invitations','i1');i.start='2026-10-01T02:00:00Z';i.end='2026-10-01T04:00:00Z';
+  U.state.events.push(...[
+    {id:'secret-a',kind:'PERSONAL',owner:'partner',title:'PRIVATE',note:'SECRET',status:'CONFIRMED',availability:'BUSY',start:'2026-10-01T01:00:00Z',end:'2026-10-01T03:00:00Z'},
+    {id:'secret-b',kind:'PERSONAL',owner:'me',status:'CONFIRMED',availability:'NEGOTIABLE',start:'2026-10-01T02:30:00Z',end:'2026-10-01T05:00:00Z'},
+    {id:'free',kind:'PERSONAL',owner:'partner',status:'CONFIRMED',availability:'FREE',start:'2026-10-01T01:00:00Z',end:'2026-10-01T06:00:00Z'}]);
+  const conflicts=JSON.parse(JSON.stringify(U.conflicts(i)));
+  assert.deepEqual(conflicts,[{start:new Date(i.start).toISOString(),end:new Date(i.end).toISOString()}]);assert.doesNotMatch(JSON.stringify(conflicts),/secret|PRIVATE|owner|availability/);
+});
+
+test('new conflicts and expired confirmation require explicit reconfirmation; no partial accept',()=>{
+  const env=preview(),{U}=env;const i=U.find('invitations','i1');i.start='2026-10-01T02:00:00Z';i.end='2026-10-01T04:00:00Z';
+  U.actions['invite-accept']({id:i.id});
+  U.state.events.push({id:'late',kind:'PERSONAL',owner:'partner',status:'CONFIRMED',availability:'BUSY',start:i.start,end:i.end});
+  assert.match(env.submit({confirmConflicts:true}),/最新的重叠时段/);assert.equal(i.status,'PENDING');
+  env.advance(120001);assert.match(env.submit({confirmConflicts:true}),/最新的重叠时段/);assert.equal(i.status,'PENDING');
+  assert.equal(env.submit({confirmConflicts:true}),null);assert.equal(i.status,'ACCEPTED');
+});
+
+test('acceptance and counter guard expiry; automatic expiry emits no notice',()=>{
+  const env=preview(),{U}=env;const i=U.find('invitations','i1');U.actions['invite-accept']({id:i.id});
+  const n=U.state.notifications.length;env.advance(864000000);
+  assert.match(env.submit({}),/过期|变化/);assert.equal(i.status,'EXPIRED');assert.equal(U.state.notifications.length,n);
+  assert.match(U.putNotificationSetting('CALENDAR_INVITATION',i.id,'NONE',null),/已结束/);
+});

@@ -187,7 +187,8 @@ test('shared event settings are independent and reschedule prompts each pending 
   assert.equal(JSON.stringify([a,b]),before);
   const checks=U.state.notifications.filter(n=>n.message.includes('请检查自己的提醒'));
   assert.equal(checks.length,2);assert.deepEqual(Array.from(checks,n=>n.recipient).sort(),['chenyu','linan']);
-  assert.equal(U.state.mailDeliveries.length,0);
+  assert.equal(U.state.mailDeliveries.length,1);
+  assert.equal(U.state.mailDeliveries[0].sourceType,'REMINDER_CHECK');
 });
 
 test('reschedule also prompts when only the proposer has a pending plan',()=>{

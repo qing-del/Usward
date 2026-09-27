@@ -138,6 +138,7 @@
     const item=options.id&&resource(options.resourceType,options.id);
     if(options.id&&!readable(options.resourceType,options.id))return failure('RESOURCE_NOT_FOUND','这个内容已不存在或不可访问。');
     if(options.expectedVersion!==undefined&&options.expectedVersion!==''&&String(item?.version)!==String(options.expectedVersion))return failure('VERSION_CONFLICT','原内容已变化，请查看最新内容后再提交。输入已保留。');
+    const invalid=options.validate?.();if(invalid)return failure('INVALID_STATE',invalid);
     let mode='NONE';
     if(!options.personal){
       if(options.notificationPlan){

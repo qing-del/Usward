@@ -1,12 +1,12 @@
 # Usward v1 核心设计
 
-版本：v1.1
+版本：v1.2
 
 日期：2026-09-27
 
 定位：支持单人先用、双人连接的私密关系辅助网站。
 
-本次修订依据 [UI/API 审计](./ui-api-audit.md)，将 G01–G08 的契约缺口落实为设计决策，并将 U01–U08 纳入交付验收。本文规定正式实现的目标契约；HTML 预览仍使用本地模拟数据，接口路径不代表后端已实现，SQL 待同步项见 §10.1。
+本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，新增数据库持久队列与可选邮件提醒方案，不引入 RabbitMQ。本文规定正式实现的目标契约；HTML 预览仍使用本地模拟数据，接口路径不代表后端已实现，SQL 待同步项见 §10.1。本轮仅修改本文，邮件依赖、配置、数据库迁移与运行时功能均留待后续实现。
 
 ## 1. 目标与范围
 
@@ -20,9 +20,9 @@
 | 兑现已经答应的事情 | 自己的承诺、截止时间、跟进记录 |
 | 一方先用也有效 | 所有个人功能无须绑定即可使用 |
 
-v1 包含账号与双人连接、今日首页、记忆卡片、轻量表达、日历与邀约、承诺、站内提醒。
+v1 包含账号与双人连接、今日首页、记忆卡片、轻量表达、日历与邀约、承诺、站内提醒，以及用户主动选择的邮件到时提醒。
 
-v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件替代、相册或附件、音视频、支付、定位、重复日程规则、外部日历同步、邮件或 Web Push、多伴侣或群组空间。共同心愿独立模块延后；暂可记为卡片，不自动视为承诺。
+v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件替代、相册或附件、音视频、支付、定位、重复日程规则、外部日历同步、Web Push、多伴侣或群组空间。邮件仅用于本人设置的到时提醒，不扩展为表达、邀约等全部业务通知的邮件推送。共同心愿独立模块延后；暂可记为卡片，不自动视为承诺。
 
 ## 2. 用户与空间
 
@@ -31,6 +31,7 @@ v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件�
 - 私人部署，初始配置两个独立账号，不开放公众注册。密码使用 Spring Security 的自适应密码哈希保存。
 - 用户可修改自己的昵称、密码、时区和内置头像 `avatarStyle`：`INITIAL`（昵称字，默认）、`FLOWER`（小花）、`SUN`（小太阳）、`SPROUT`（新芽）。昵称字由当前昵称派生，不存图片。显示时区使用 IANA 标识，修改它不会重写既有绝对时间、全天安排时区或日期截止时区。
 - Session 登录；修改密码使已有会话失效。部署者通过维护命令重置密码，v1 不实现找回邮件。
+- 用户可设置或清空自己的通知收件邮箱 `notificationEmail`，用于邮件提醒；不作为登录账号，不向对方公开。私人部署 v1 由本人确认地址，不增加邮箱验证或找回密码流程；更换或清空地址时，取消尚未完成的旧地址邮件任务，不把它们转投新地址。
 - 两个账号使用相同功能。产品内没有可以查看对方私密内容的超级账号。
 
 ### 2.2 连接
@@ -47,7 +48,7 @@ v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件�
 - 解除立即终止旧连接的共享访问、忙闲展示、待处理邀约和跨用户提醒。
 - 个人内容保留。原共享卡片和承诺恢复为作者私密，清除分享关系；卡片的补充/更正按撤销分享规则删除。
 - 表达与回应、邀约、共同事件作为旧连接内容封存，v1 界面与 API 均不再提供访问；已有共同安排不自动复制给个人。
-- 新连接不会继承旧连接内容。站内通知不得绕过以上限制。
+- 新连接不会继承旧连接内容。站内通知与邮件任务不得绕过以上限制。
 - 解除不是删除；数据库备份仍可能保留历史。部署维护说明须明确这一点。
 
 ## 3. 页面与交互
@@ -60,7 +61,7 @@ v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件�
 | 日历 | 手机默认日程列表；可切周/月；个人安排、对方忙闲、确认后的共同安排 |
 | 表达 | 发出与收到的表达、回应、邀约入口；不显示在线状态或已读回执 |
 | 记忆 | 卡片列表、类别/标签筛选、关键词搜索、编辑与分享 |
-| 我的 | 承诺清单、通知、账号、时区、忙闲共享、连接与解除 |
+| 我的 | 承诺清单、通知、账号、通知收件邮箱、时区、忙闲共享、连接与解除 |
 
 交互约束：新增内容默认私密；所有可选字段均可跳过；发送失败保留草稿；未绑定时用可解释的邀请入口替代发送按钮。首页不展示关系成绩或完成率。
 
@@ -68,7 +69,7 @@ v1 不包含 AI 分析或代回复、关系评分、打卡排行、聊天软件�
 
 ### 4.1 内容
 
-必填：正文。可选：标题、类别、标签、来源类型、来源日期、下次行动、提醒时间。
+必填：正文。可选：标题、类别、标签、来源类型、来源日期、下次行动、提醒时间及提醒方式。
 
 类别：喜好兴趣、近期关注、相处偏好、明确边界、共同经历、自我反思、其他。
 
@@ -177,13 +178,85 @@ stateDiagram-v2
 区分两类信息：用户主动设置的到时提醒，以及表达、邀约等操作产生的站内通知。
 
 - 每个用户可为自己可访问的一张卡片、一个事件或一条自己的承诺设置一个有效提醒时间。
-- 提醒只有本人能看见；共同事件双方各自设置，互不影响。
-- v1 仅站内通知，网页关闭后不保证送达；首页加载及页面可见时每 60 秒刷新未读数量。
-- 扫描器每分钟读取所有已到期且未处理提醒，生成一次通知；停机后补扫，不限定「当前分钟」。
-- 通知插入、提醒状态变更同事务；唯一去重键避免重试重复。数据库事务提交前不执行外部发送。
-- 用户每次设置提醒均增加修订号，包括取消后重设相同时刻；旧计划失效。提醒时间为绝对时间，事件改期后保持原值。改期事务分别为有 `PENDING` 提醒的双方生成“请检查自己的提醒”通知，仅本人可见，不向对方暴露提醒设置。
-- 通知仅保存类型、资源引用和通用文案，私密正文在打开时重新鉴权后读取。
-- 内容撤回、删除、撤销分享或解除连接后，取消失去访问权限的未发送提醒，将不可访问的旧通知永久标记失效；撤销分享不取消作者仍有权使用的私人提醒。共同事件取消时取消双方未发送提醒；承诺完成或取消时取消其未发送提醒，重新打开不自动恢复。取消的事件仍可通过业务取消通知查看说明。
+- 提醒只有本人能看见；共同事件双方各自设置时间与方式，互不影响。到时邮件只发给提醒设置者，不因内容共享而自动发给对方。
+- 有提醒时间的表单提供下表两种方式，默认站内提醒；记忆卡片、个人/共同事件和自己的承诺复用同一选择器。不支持单独邮件提醒。承诺截止、事件开始和表达中的回应偏好本身不自动创建提醒，仍须用户明确设置 `scheduledAt`。
+- 站内通知保存在数据库，网页关闭时仍会生成，用户下次打开可见；不提供浏览器弹窗或关闭网页后的即时触达保证。首页加载及页面可见时每 60 秒刷新未读数量。邮件可在网页关闭时发送，前提是后端、数据库与 SMTP 服务可用。
+- 提醒扫描器每分钟按索引分批读取 `status=PENDING AND scheduled_at <= now`，生成站内通知；停机后补扫，不限定「当前分钟」。另一个消费者扫描数据库邮件队列；一分钟扫描与队列等待意味着不承诺精确到秒或严格准点送达。
+- 站内通知插入、按方式创建邮件任务、提醒置 `FIRED` 在同一事务中完成；唯一去重键避免重复生成。SMTP 在提交后由独立消费者执行，流程见 §7.3。`FIRED` 表示到时处理已持久化，不表示邮件已送达。
+- 用户每次设置提醒均增加修订号，包括仅切换提醒方式、取消后重设相同时刻；旧计划与旧修订尚未完成的邮件任务失效。提醒时间为绝对时间，事件改期后保持原值。改期事务分别为有 `PENDING` 提醒的双方生成“请检查自己的提醒”站内通知，仅本人可见，不向对方暴露提醒设置，也不自动发送改期邮件。
+- 通知仅保存类型、资源引用和通用文案，私密正文在打开时重新鉴权后读取。邮件固定使用通用主题与正文，例如“你设置的提醒已到，请登录 Usward 查看”，附网站入口；不包含资源标题、正文、回应、地点或取消说明，链接不携带免登录凭据。
+- 内容撤回、删除、撤销分享或解除连接后，取消失去访问权限的 `PENDING` 提醒及相关尚未完成的邮件任务，将不可访问的旧通知永久标记失效；撤销分享不取消作者仍有权使用的私人提醒。共同事件取消、承诺完成或取消时，取消其相关未触发提醒及未完成邮件任务，重新打开不自动恢复。邮件任务清理包括已 `FIRED` 提醒所生成的任务。取消的事件仍可通过业务取消通知查看说明；已发送邮件无法收回。
+
+| 界面方式 | `deliveryMode` | 到时行为 |
+| --- | --- | --- |
+| 站内提醒 | `IN_APP`（默认） | 生成一条站内通知 |
+| 站内提醒 + Mail 提醒 | `IN_APP_AND_MAIL` | 生成同一条站内通知，并创建一条邮件投递任务 |
+
+邮件选项仅在部署启用邮件能力且本人已设置有效收件邮箱时可选；否则保留站内选项并说明需先设置邮箱或启用部署配置。保存时服务端再次校验，不能只依靠前端置灰。邮件故障不影响站内通知生成，也不把已触发提醒重新置为 `PENDING`。
+
+### 7.3 数据库队列与发送可靠性
+
+**方案可行，适用于当前私人部署、双人使用、低频提醒的规模。** 这是基于本项目规模与一致性需求的架构判断：采用 MySQL 8.4 / InnoDB 持久表作为队列，与现有事务、备份和定时扫描共用基础设施，无须 RabbitMQ。这里的“本地表”是应用数据库表，服务重启后任务仍保留。MySQL 官方明确允许用 `SKIP LOCKED` 降低多个会话访问队列表时的锁竞争。[MySQL 锁定读取文档](https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html)
+
+三张表分别表达不同职责：`reminder` 保存当前提醒时间、方式与修订；`notification` 保存用户可见的站内通知与已读状态；新增 `notification_delivery` 保存待发送及已处理的邮件任务，作为事务内写入的持久队列。v1 该队列仅有 `channel=MAIL`，站内通知在本地事务内生成；已读状态与邮件投递状态互不影响。
+
+```mermaid
+flowchart TD
+    A[每分钟扫描已到时 reminder] --> B[同一事务：写站内通知、按方式入队、置 FIRED]
+    B --> C[notification 供页面读取]
+    B -->|仅 IN_APP_AND_MAIL| D[notification_delivery 邮件队列]
+    D --> E[短事务领取任务并提交]
+    E --> F[重新校验后在事务外执行 SMTP]
+    F --> G[回写 SENT，或安排重试 / 标记 FAILED]
+```
+
+处理协议：
+
+1. **到时生成。** 先读取候选提醒 ID，再按既有连接、用户、业务资源、提醒的锁顺序重查权限、状态与修订；插入去重键为 `reminder:<id>:<revision>` 的站内通知。组合方式同时插入邮件任务，保存 `reminder_id/reminder_revision`、关联通知及当时的收件邮箱快照；`(notification_id, channel)` 唯一。最后置提醒 `FIRED`，一起提交或回滚。到时邮件能力已关闭或邮箱缺失时仍生成站内通知，邮件任务直接记为 `FAILED` 并保存原因，避免静默丢失。
+2. **领取。** 邮件消费者每轮结束后等待 10 秒再启动（fixedDelay），每轮最多处理 20 条，v1 一个发送 worker；使用独立执行器，避免 SMTP 等待阻塞提醒扫描。逐条领取即将发送的任务，不提前领取整批后排队等待。短事务按 `next_attempt_at, id` 读取 `QUEUED` 且已到尝试时间的任务，使用 `FOR UPDATE SKIP LOCKED`；改为 `PROCESSING`，递增 `attempt_count`，写入随机 `lock_token` 与 `lease_until` 后提交。单实例也遵守该协议，重复调度或以后增加实例时可共用。
+3. **发送前校验。** 领取事务只锁队列行，结束后再按业务锁顺序校验通知未失效、资源仍可访问且未关闭、提醒修订仍匹配且为 `FIRED`、邮箱快照仍为本人当前地址；最后锁任务确认本 worker 仍持有有效租约。失效任务置 `CANCELLED`。同时重查邮件能力仍启用且配置齐全，否则置 `FAILED`，记录 `MAIL_DISABLED/MAIL_CONFIG_INCOMPLETE`。提交后才发送 SMTP，不持有数据库事务等待网络；实际发起前再检查任务未取消与租约有效。
+4. **回写。** SMTP 成功接受邮件后，短事务以 `id + status=PROCESSING + lock_token` 且租约仍有效为条件置 `SENT`，记录 `sent_at` 并清空租约。临时失败返回 `QUEUED` 并设置下次尝试时间；明确永久失败或耗尽尝试次数置 `FAILED`。所有失败、续租与回写都校验 token，旧 worker 不得覆盖取消结果或新 worker 的状态。发送成功但数据库回写临时失败时，当前 worker 优先重试回写，不立即重发邮件。
+5. **故障恢复。** 租约默认 120 秒，须覆盖一次有界发送；需要延长时仅当前 token 可续租。独立恢复任务每分钟扫描过期的 `PROCESSING`，有剩余次数则重新排队，否则置 `FAILED`，旧 token 失效。网络超时、SMTP 临时拒绝或限流采用退避，默认最多 5 次领取尝试（含首次），失败后间隔 1、5、15、60 分钟，可由部署配置调整；认证凭据错误、明确无效地址等永久失败不反复重试。重试只处理邮件任务，不重新插入站内通知。
+
+任务状态为 `QUEUED → PROCESSING → SENT`，临时失败为 `PROCESSING → QUEUED`；永久失败/次数耗尽为 `FAILED`，失效或用户取消为 `CANCELLED`。`SENT/FAILED/CANCELLED` 是自动处理终态，修复配置不自动重放。只有 `FAILED` 任务可由部署者通过维护命令人工重试，须再次检查权限、当前提醒修订和邮箱快照，复用原任务并重置尝试次数，不新建站内通知；`SENT/CANCELLED` 不重开。v1 不增加用户批量重发或管理后台。
+
+可靠性边界：
+
+- **站内一次生成，邮件可能重复。** 唯一键和事务可保证同一提醒修订只有一条站内通知与一条邮件任务，但 SMTP 与数据库不能原子提交：邮件已被服务器接受、进程在回写前宕机，或发送结果超时不明时，重新领取可能再次发送。邮件采用允许重复的至少一次尝试语义，并受最大尝试次数限制；不能承诺最终必达或严格只发一次。[RFC 5321 关于超时与重复投递的说明](https://www.rfc-editor.org/rfc/rfc5321.html#section-4.5.3.2.6)
+- **接受不等于到达收件箱。** `SENT` 仅表示 SMTP 服务器接受，不能据此判断用户已收到、已读或邮件未进垃圾箱；v1 不处理退信回执。邮件任务失败不回滚站内通知。
+- **取消有发送中的边界。** 取消、改邮箱和权限清理在业务事务内将关联 `QUEUED/PROCESSING` 任务置 `CANCELLED` 并清空 token；消费者会再次检查，但检查后与 SMTP 发起之间仍有并发窗口，已开始的发送可能完成。通用邮件不携带私密内容，网站入口始终要求登录并重新鉴权，不能承诺撤销在途邮件。
+- **可排查。** 保存尝试次数、下次尝试时间、租约和脱敏失败码，记录队列积压、最老等待时间、失败数量及租约恢复情况。日志不输出密码、授权码、完整收件邮箱或业务正文。v1 保留终态任务用于排查，后续按实际数据量制定归档策略，不清理仍可重试的任务或站内通知去重凭证。
+
+### 7.4 SMTP 配置与接入
+
+后续引入与当前 Spring Boot 版本匹配的 `spring-boot-starter-mail`，由 `JavaMailSender` 发送。用户提供的四项配置放在 `spring.mail` 下；`username/password` 是发信凭据，收件人来自当前用户的 `notificationEmail`，不能把 SMTP 用户名当作所有用户的收件地址。Spring Boot 提供自动配置，但部分默认超时为无限，需要显式设置。[Spring Boot 4.0 邮件文档](https://docs.spring.io/spring-boot/4.0/reference/io/email.html)
+
+以拟提供的 `smtp.qq.com:465` 为例，配置方案如下；凭据默认留空，实际值通过环境变量提供：
+
+```yaml
+spring:
+  mail:
+    host: ${SMTP_HOST:smtp.qq.com}
+    port: ${SMTP_PORT:465}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      "[mail.smtp.auth]": true
+      "[mail.smtp.ssl.enable]": true
+      "[mail.smtp.ssl.checkserveridentity]": true
+      "[mail.smtp.connectiontimeout]": 10000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
+
+app:
+  public-base-url: ${PUBLIC_BASE_URL:}
+  notifications:
+    mail-enabled: ${MAIL_NOTIFICATIONS_ENABLED:false}
+```
+
+465 使用隐式 TLS，须显式启用 SSL；若后续改用要求 STARTTLS 的服务商/端口，须相应修改 TLS 属性，不能只改端口。[RFC 8314 的 SMTP 隐式 TLS 规定](https://www.rfc-editor.org/rfc/rfc8314.html#section-3.3) 保留证书与主机名校验，不使用信任所有证书的配置。[Angus Mail SMTP 属性文档](https://eclipse-ee4j.github.io/angus-mail/docs/api/org.eclipse.angus.mail/org/eclipse/angus/mail/smtp/package-summary.html)
+
+`SMTP_PASSWORD` 填服务商要求的 SMTP 凭据；服务商要求授权码时使用授权码。v1 发件人 `From` 使用 `SMTP_USERNAME` 对应的邮箱，须通过服务商验证。`PUBLIC_BASE_URL` 是生产 HTTPS 网站入口。邮件能力默认关闭，缺少凭据或有效网站地址时保持不可用并记录配置原因，站内功能照常；“可用”只表示启用且配置齐全，不代表 SMTP 连通性或最终送达已验证。上线时另行验证认证、TLS 与实际投递，本轮不写入真实凭据或发送邮件。
 
 ## 8. 权限矩阵
 
@@ -206,9 +279,10 @@ stateDiagram-v2
 | --- | --- |
 | 前端 | Vue 3、TypeScript、Vite、Vue Router；普通 CSS 与必要组件；FullCalendar 日历 |
 | 后端 | Java 21、Spring Boot、Spring Security、MyBatis，模块化单体 |
-| 数据 | MySQL，Flyway 管理迁移；事务与唯一约束保证核心一致性 |
+| 数据 | MySQL 8.4 / InnoDB，Flyway 管理迁移；事务与唯一约束保证核心一致性 |
 | 登录 | Session Cookie，Spring Session JDBC 持久化会话；同源 API 与 CSRF 防护 |
-| 提醒 | Spring 定时任务 + 数据库到期扫描 |
+| 提醒 | Spring 定时任务扫描 reminder；站内通知与邮件任务同事务落库 |
+| 邮件 | notification_delivery 持久队列 + 独立定时消费者 + JavaMailSender / SMTP；不引入 RabbitMQ |
 | 部署 | Nginx 提供静态页面、HTTPS 和 `/api` 反代；Docker Compose 启动应用与数据库 |
 
 依赖具体版本在创建工程时确认兼容性并固定。单后端实例即可；数据库不对公网开放。会话 Cookie 设置 `HttpOnly`、生产环境 `Secure` 和适当 `SameSite`；登录、密码修改及邀请兑换有基础限流。
@@ -219,7 +293,7 @@ stateDiagram-v2
 
 | 表 | 核心字段 |
 | --- | --- |
-| `app_user` | id、username（唯一）、password_hash、nickname、avatar_style、timezone、active_connection_id、share_availability |
+| `app_user` | id、username（唯一）、password_hash、nickname、avatar_style、timezone、notification_email（可空，仅本人可见）、active_connection_id、share_availability |
 | `pair_connection` | id、user_a_id、user_b_id、status（ACTIVE/ENDED）、ended_at |
 | `pair_invite` | id、inviter_id、token_hash（唯一）、expires_at、status、accepted_by |
 | `memory_card` | id、owner_id、shared_connection_id（可空）、title、body、category、source_type、source_date、next_action、archived、deleted_at |
@@ -230,8 +304,9 @@ stateDiagram-v2
 | `calendar_event` | id、owner_id（个人时必填）、connection_id（共同时必填）、kind、title、时间字段、note/location、availability、share_title、offline_confirmed_at、status、cancellation_reason、pending_change_invitation_id、origin_invitation_id（唯一，可空） |
 | `calendar_invitation` | id、connection_id、sender_id、recipient_id、purpose（CREATE/CHANGE）、target_event_id、base_event_version、previous_invitation_id、source_expression_id、提议内容及时间字段、status |
 | `commitment` | id、owner_id、shared_connection_id（可空）、title、body、due_kind、due_at、due_date、due_timezone、next_action、status、result、source_type、source_id |
-| `reminder` | id、recipient_id、resource_type、resource_id、scheduled_at、revision、status（PENDING/FIRED/CANCELLED）；资源与接收人组合唯一 |
+| `reminder` | id、recipient_id、resource_type、resource_id、scheduled_at、delivery_mode（IN_APP/IN_APP_AND_MAIL，默认 IN_APP）、revision、status（PENDING/FIRED/CANCELLED）；资源与接收人组合唯一 |
 | `notification` | id、recipient_id、kind、resource_type、resource_id、message、dedupe_key（唯一）、created_at、read_at、invalidated_at |
+| `notification_delivery` | id、notification_id、reminder_id、reminder_revision、recipient_id、channel（v1 为 MAIL）、to_address（收件地址快照，邮箱缺失的 FAILED 任务可空）、status（QUEUED/PROCESSING/SENT/FAILED/CANCELLED）、attempt_count、next_attempt_at、lock_token、lease_until、sent_at、last_error_code；notification_id 与 channel 组合唯一 |
 
 设计约束：
 
@@ -243,6 +318,9 @@ stateDiagram-v2
 - 解除连接与跨用户写入均先锁定同一连接行并检查 ACTIVE；解除事务内取消待处理邀约、取消跨用户提醒、恢复作者私密对象。
 - 归属、成员、状态条件必须参与查询/更新。软删除、归档和撤回的语义由业务接口控制，不提供任意表字段更新。
 - 建立 `(owner_id, updated_at)`、`(shared_connection_id, updated_at)`、`(connection_id, status)`、`(recipient_id, read_at, created_at)`、`(status, scheduled_at)` 等查询索引；日历索引覆盖归属与起止查询。
+- 邮件队列增加 `(status, next_attempt_at, id)` 与 `(status, lease_until, id)`，分别用于领取与租约恢复；`(reminder_id, reminder_revision, status)`、`(recipient_id, status)` 支持旧修订取消与邮箱变更清理。关联通知、提醒及接收者必须相互一致；队列不保存 SMTP 密码或私密正文，不对外提供任意入队接口。
+- 队列尝试时间、租约生成与过期判断统一使用数据库 UTC 时钟；仅 PROCESSING 状态持有非空 token 与租约，离开该状态时一起清空。QUEUED/PROCESSING 必须有有效收件地址，邮箱缺失的 FAILED 任务不能直接重排，须由用户重新设置提醒。
+- 提醒/通知生成与失效清理按连接、用户、业务资源、提醒、通知、投递任务的顺序加锁；队列领取/恢复事务仅锁任务行，提交后才进行业务鉴权，不能持有任务锁反向获取连接或用户锁。过期租约重排仍须下一次发送前重新鉴权，不能恢复已经 CANCELLED 的任务。
 
 ### 10.1 数据库同步要求
 
@@ -252,6 +330,9 @@ stateDiagram-v2
 - `commitment` 新增 `due_kind`、`due_date`、`due_timezone`；旧 `due_at` 非空回填 `INSTANT`，为空回填 `NONE`。日期截止保持独立字段，校验互斥组合，并补日期截止查询索引。
 - `calendar_event.cancellation_reason`、`pending_change_invitation_id` 与 `notification.message` 已在 SQL 中存在，本次补入模型表；无需重复新增列。
 - `notification` 新增可空 `invalidated_at`：撤回、删除、撤销分享或解除使某条通知失去访问权时写入，不因再次分享而清空；用于阻止旧通知复活，查询同时仍需实时鉴权。
+- `app_user` 新增可空 `notification_email`，既有用户保持 null，不以登录账号或 SMTP 发件人回填。
+- `reminder` 新增 `delivery_mode`，非空且默认 `IN_APP`；既有提醒全部回填为站内方式，不能迁移后自动开始发送邮件。
+- 新增 `notification_delivery` 表及上述唯一约束、扫描/恢复/清理索引；既有通知不回溯创建邮件任务。邮箱更改、提醒修订、资源关闭及权限失效的业务事务须同步清理未完成任务。
 - 当前预览中仅存于 localStorage 的头像、日期截止等数据不代表已持久化到数据库。后续迁移、DTO 和前端字段需一起验证。
 
 ## 11. API 约定与核心接口
@@ -279,8 +360,8 @@ stateDiagram-v2
 
 ### 11.1 身份、资料与连接邀请
 
-- `GET /me` 返回 `{id, username, nickname, avatarStyle, timezone, shareAvailability, version, stats}`；`stats` 为自己的 `{openCommitmentCount, archivedMemoryCount}` 全量计数。`PATCH /me` 只接受昵称、头像、时区、忙闲开关及 `expectedVersion`。密码接口接收 `{oldPassword, newPassword}`，校验成功后使包括当前会话在内的已有 Session 失效。
-- 公开用户摘要仅含 `{id, nickname, avatarStyle}`；连接、分享者、表达参与者使用该摘要，不返回对方账号、时区或完整用户设置。前端不提交 `me/partner` 身份、`signedIn`、owner 或 sender；服务端从 Session 和当前有效连接确定归属及接收者。
+- `GET /me` 返回 `{id, username, nickname, avatarStyle, timezone, notificationEmail, mailReminderAvailable, shareAvailability, version, stats}`；`stats` 为自己的 `{openCommitmentCount, archivedMemoryCount}` 全量计数。`mailReminderAvailable` 由服务端根据邮件启用状态、必需配置及本人有效收件邮箱派生，不接受客户端写入，也不代表 SMTP 连通性已验证。`PATCH /me` 只接受昵称、头像、时区、`notificationEmail`、忙闲开关及 `expectedVersion`；邮箱只接受单个有效地址，null 表示清空，省略表示不修改。地址变化时在同一资料事务内取消本人 `QUEUED/PROCESSING` 邮件任务并使其 token 失效。密码接口接收 `{oldPassword, newPassword}`，校验成功后使包括当前会话在内的已有 Session 失效。
+- 公开用户摘要仅含 `{id, nickname, avatarStyle}`；连接、分享者、表达参与者使用该摘要，不返回对方账号、时区、邮箱或完整用户设置。前端不提交 `me/partner` 身份、`signedIn`、owner 或 sender；服务端从 Session 和当前有效连接确定归属及接收者。
 - `GET /connection` 返回 `{connection, currentInvite}`。未连接时 `connection=null`；连接时为 `{id, status: ACTIVE, version, members: [公开用户摘要]}`。`currentInvite` 仅为本人未过期的待发邀请 `{id, status: PENDING, expiresAt, version}`，不存在则为 `null`，永不含 token；读取时按当前时间过滤过期记录。对方忙闲共享状态从 §11.5 的 availability DTO 读取。
 - `POST /connection-invites` 返回 `{id, token, expiresAt, status, version}`；生成新口令时锁定邀请者并撤销其旧待发邀请。preview 接收 `{token}`，返回 `{id, inviter, expiresAt, version}`；accept 接收 `{token, expectedVersion}`，版本针对预览的邀请，返回连接 DTO。revoke 接收 `{expectedVersion}`；成功返回撤销后的邀请元数据。
 - 口令无效返回 `404 INVITE_NOT_FOUND`；口令匹配但过期、已撤销、已使用分别返回 `409 INVITE_EXPIRED/INVITE_REVOKED/INVITE_USED`；自接受为 `400 SELF_INVITE`，任一方已连接为 `409 ALREADY_CONNECTED`。预览不消费口令，接受时重新检查全部条件；成功连接后撤销双方其余待发邀请。未知口令响应不包含邀请者信息。
@@ -321,8 +402,8 @@ stateDiagram-v2
 | 事件 | `kind, ownerId, connectionId, title, location, note, 时间结构, availability, shareTitle, offlineConfirmedAt, status, originInvitationId, pendingChangeInvitationId, cancellationReason, myReminder`；个人详情仅作者可读；共同事件的个人专属字段为 null/false |
 | 邀约/修改提案 | `connectionId, senderId, recipientId, purpose, targetEventId, baseEventVersion, previousInvitationId, sourceExpressionId, title, location, note, 时间结构, status, expiresAt, eventId, conflicts, conflictToken`；`expiresAt` 为实际过期边界，接受前 `eventId=null` |
 | 承诺 | `ownerId, sharedConnectionId, title, body, nextAction, 截止字段及派生字段, status, result, sourceType, sourceId, sourceAvailable, myReminder`；对方读取时 `myReminder=null`，来源不附带正文 |
-| 提醒 | `id, resourceType, resourceId, scheduledAt, revision, status, version`；只返回当前用户自己的设置 |
-| 通知 | `id, kind, resourceType, resourceId, message, createdAt, readAt`；message 为通用文案，不含标题或私密正文 |
+| 提醒 | `id, resourceType, resourceId, scheduledAt, deliveryMode, revision, status, version`；只返回当前用户自己的设置 |
+| 通知 | `id, kind, resourceType, resourceId, message, createdAt, readAt, mailDelivery`；message 为通用文案，不含标题或私密正文；mailDelivery 无邮件任务时为 null，否则为 `{status, sentAt, failureCode}`，failureCode 仅在 FAILED 时提供脱敏失败码 |
 
 列表与首页复用如下摘要：所有项包含 id；可变资源另含 version、createdAt、updatedAt。记忆摘要含 `ownerId, owner, title, category, tags, sourceType, sharedConnectionId`（owner 为公开用户摘要）；表达摘要含 `senderId, recipientId, type, responseWindow, responseMode, status, replyCount, lastReply`；邀约摘要含 `senderId, recipientId, purpose, title, 时间结构, status, expiresAt, targetEventId, eventId`；承诺摘要含 `ownerId, owner, title, nextAction, status, 截止字段及派生字段, sharedConnectionId`。日历项使用事件 DTO，提醒与通知列表使用各自完整 DTO。精选记忆使用记忆摘要，正文由详情读取；撤回表达始终使用占位 DTO。
 
@@ -342,6 +423,8 @@ stateDiagram-v2
 | `reply.preset` | `LATER` 看到了，晚点找你、`AVAILABLE_NOW` 现在方便、`ANOTHER_TIME` 想换个时间；为空时 body 必填，预设可带补充 body；发送者补充使用自由正文 |
 | `commitment.sourceType` | `EXPRESSION/MEMORY_CARD/CALENDAR_EVENT`，与 `sourceId` 同时为空或同时提供；按类型打开对应详情 |
 | `reminder.resourceType` | `MEMORY_CARD/CALENDAR_EVENT/COMMITMENT`；承诺目标必须属于本人 |
+| `reminder.deliveryMode` | `IN_APP` 站内提醒（默认）、`IN_APP_AND_MAIL` 站内提醒 + Mail 提醒；不接受 MAIL 单独模式 |
+| `notification.mailDelivery.status` | `QUEUED` 等待发送、`PROCESSING` 正在处理、`SENT` 邮件服务器已接受、`FAILED` 发送失败、`CANCELLED` 已取消；状态不改变站内通知的已读状态 |
 
 ### 11.4 列表、筛选与全量统计
 
@@ -387,11 +470,15 @@ stateDiagram-v2
 
 资源详情中的 `myReminder` 返回当前用户那一行提醒（包括 FIRED/CANCELLED），未设置过为 null。详情由此取得刷新后删除所需 ID、修订号与状态；前端只有 PENDING 状态显示为已设置，取消或已触发不能误显为未来计划。对方分享承诺不能设置提醒。
 
-`PUT /reminders` 接收 `{resourceType,resourceId,scheduledAt,expectedRevision}`。首次设置 expectedRevision 为 null；已有记录必须携带当前 revision。锁定目标与该用户资源组合，校验目标仍可访问且事件未取消、承诺仍 OPEN；新行 revision 为 `"1"`，每次成功设置递增并置 PENDING，即使 scheduledAt 与旧值相同。时间可早于当前时刻，届时下一次扫描补触发。修订不匹配返回 `409 REMINDER_REVISION_CONFLICT`，不得覆盖较新的计划。
+`PUT /reminders` 接收 `{resourceType,resourceId,scheduledAt,deliveryMode,expectedRevision}`。deliveryMode 省略时按 IN_APP，前端编辑时读取并显式提交当前选择。首次设置 expectedRevision 为 null；已有记录必须携带当前 revision。按 §10 的顺序锁定连接（如有）、相关用户、目标资源及该用户资源组合的提醒行，校验目标仍可访问且事件未取消、承诺仍 OPEN。组合方式还须校验本人邮箱及部署邮件能力，未设邮箱返回 `400 RECIPIENT_EMAIL_REQUIRED`，邮件未启用或配置不完整返回 `409 MAIL_NOT_AVAILABLE`；不能静默改成站内方式，也不在保存事务中连接 SMTP。
 
-清空表单调用 `DELETE /reminders/{id}`，请求体 `{expectedRevision}`；成功将状态置 CANCELLED 并递增 revision，返回最新提醒 DTO，保留行以供后续重设。对已取消记录的当前 revision，或刚执行取消所使用的前一 revision 的重复请求，返回当前取消 DTO；更旧修订或取消后已重设均返回 409。取消不撤回已经生成的通知。扫描器在锁内重新鉴权，`reminder:<id>:<revision>` 为通知去重键；扫描和取消并发以事务提交顺序决定本修订是否已触发。
+新行 revision 为 `"1"`，每次成功设置递增并置 PENDING，即使 scheduledAt 与旧值相同或只修改 deliveryMode；同事务取消该提醒旧修订关联的 QUEUED/PROCESSING 邮件任务并使 token 失效，保留已生成且仍有权访问的站内通知。时间可早于当前时刻，届时下一次扫描补触发。修订不匹配返回 `409 REMINDER_REVISION_CONFLICT`，不得覆盖较新的计划。
 
-新建卡片、事件或承诺后先取得资源 ID，再 PUT 提醒；资源创建成功但提醒失败时明确显示“内容已保存，提醒未设置”，保留提醒输入并只重试提醒，不再次创建资源。每次 PUT 成功后保存最新 revision；响应丢失时先读取 myReminder 核实修订，不盲目发起新的设置。事件改期不改变 scheduledAt/revision，按 §7.2 通知双方分别检查。资源关闭、失去访问权的清理与业务变更同事务执行，取消 PENDING 计划时也递增 revision；再次分享、重新打开或重新连接均不自动恢复旧提醒。
+清空表单调用 `DELETE /reminders/{id}`，请求体 `{expectedRevision}`；成功将状态置 CANCELLED 并递增 revision，同事务取消该提醒所有未完成邮件任务并使 token 失效，返回最新提醒 DTO，保留行以供后续重设。该操作也适用于 FIRED 提醒，便于终止已生成但仍在等待/重试的邮件。对已取消记录的当前 revision，或刚执行取消所使用的前一 revision 的重复请求，返回当前取消 DTO；更旧修订或取消后已重设均返回 409。取消不撤回已经生成的站内通知或已经发送的邮件。扫描器在锁内重新鉴权，`reminder:<id>:<revision>` 为通知去重键；扫描和取消并发以事务提交顺序决定本修订是否已触发，邮件发送中的取消边界见 §7.3。
+
+新建卡片、事件或承诺后先取得资源 ID，再 PUT 提醒；资源创建成功但提醒失败时明确显示“内容已保存，提醒未设置”，保留提醒时间与方式并只重试提醒，不再次创建资源。每次 PUT 成功后保存最新 revision；响应丢失时先读取 myReminder 核实修订、时间与方式，不盲目发起新的设置。事件改期不改变 scheduledAt/deliveryMode/revision，按 §7.2 通知双方分别检查。资源关闭、失去访问权的清理与业务变更同事务执行，取消 PENDING 计划时也递增 revision，同时取消相关 FIRED 提醒的未完成邮件任务；再次分享、重新打开或重新连接均不自动恢复旧提醒或邮件任务。
+
+收件地址仅在到时创建邮件任务时快照，未来 PENDING 提醒使用届时本人的有效邮箱；更换邮箱不修改提醒时间或方式，已入队任务不转投新地址。若到时邮箱被清空或邮件能力已关闭，站内照常生成，邮件任务标记 FAILED，失败码为 `RECIPIENT_EMAIL_MISSING/MAIL_DISABLED/MAIL_CONFIG_INCOMPLETE`。通知页面按 mailDelivery 展示等待、处理、服务器已接受、失败或取消；配置修复不会自动补发此前 FAILED 任务，站内已读也不取消邮件。
 
 ### 11.8 邀约冲突确认、版本与操作结果
 
@@ -426,9 +513,11 @@ stateDiagram-v2
 | 失败 | 客户端行为 |
 | --- | --- |
 | `400 VALIDATION_ERROR` + fieldErrors | 定位字段并保留输入；非法枚举、互斥时间字段同样适用 |
+| `400 RECIPIENT_EMAIL_REQUIRED` | 保留提醒输入，提示先在“我的”设置收件邮箱，或由用户选择站内方式后重新保存 |
 | `401 AUTH_REQUIRED` | 按账号隔离保存草稿，重新登录并获取 CSRF；回到原操作后重新读资源和版本，不自动发送 |
 | `404 RESOURCE_NOT_FOUND` | 统一显示资源不存在或已不可访问，清除失效的远端内容缓存；来源入口降级为“来源不可用” |
 | `409 VERSION_CONFLICT/INVALID_STATE` 等 | 重新获取资源，保留本地输入供核对，不自动覆盖新版本；冲突确认按 §11.8 的独立提示处理 |
+| `409 MAIL_NOT_AVAILABLE` | 保留提醒输入并刷新个人邮件能力，提示部署邮件未启用或配置不完整；不自动降级保存 |
 | 网络失败或响应不明 | 保留输入；已有资源先刷新确认写入结果，避免自动重复发出表达、评论或创建资源 |
 
 登录前获取 `GET /auth/csrf`，登录后及会话重建后重新获取；所有变更请求携带 CSRF，校验失败返回 `403 CSRF_INVALID`，重新获取后让用户重试。退出登录、切换账号时隔离并清除上一账号的远端缓存；草稿不跨账号显示。导航、分享预览、密码显隐、两步解除确认仍为前端交互，演示数据载入与任意演示密码不进入正式 API。
@@ -449,13 +538,13 @@ stateDiagram-v2
 
 ### 阶段 C：发布可用
 
-解除连接、异常交互、手机适配、备份与恢复说明、部署配置和核心回归。
+解除连接、异常交互、手机适配、备份与恢复说明、SMTP 与收件邮箱配置、组合提醒发送和核心回归。
 
 验收：
 
 1. 篡改资源 ID、列表筛选、来源引用和通知入口均不能越权。
 2. 接受/撤回并发不会重复创建事件；改期/取消并发不会复活已取消事件。
-3. 提醒重复扫描、服务重启不会产生重复通知；已撤回内容不再泄露正文。
+3. 同一提醒修订在重复扫描、服务重启后只生成一条站内通知和至多一条邮件任务；邮件失败与重试不影响站内通知，已撤回内容不再泄露正文。SMTP 重复投递与取消在途发送按 §7.3 的边界验收。
 4. 解除连接后旧共同空间立即不可访问，个人内容仍可用，新绑定不会泄露旧内容。
 5. 手机可完成核心流程；刷新保留服务端数据，网络失败保留输入，过期会话能重新登录。
 6. 数据库定期备份，至少完成一次恢复验证；生产启用 HTTPS，无默认密码或仓库内真实密钥。
@@ -478,12 +567,27 @@ stateDiagram-v2
 | U02 全天时区 | §11.2 | 上海 2026-09-28 全天开始边界为 2026-09-27T16:00Z；改显示时区为纽约后编辑标题再保存，创建时区和边界仍相同；包含结束日与排他结束日可往返 |
 | U03 首页提醒 | §11.6 | 只有对方分享卡片、个人/共同事件或承诺上的本人提醒时，首页仍展示；按时间排序且排除 FIRED/CANCELLED，不误称未设置 |
 | U04 首页逾期 | §11.2、§11.6 | 上海同日 14:00 精确截止、15:00 查询时，首页与承诺页均为“已过约定时间”；日期截止在整天内不误判 |
-| U05 提醒重设 | §11.7 | 同一时刻触发、取消、重设后 revision 增加并产生一次新通知；重复扫描、进程重启、陈旧修订与取消并发不重复发送同一修订 |
+| U05 提醒重设 | §11.7 | 同一时刻触发、取消、重设后 revision 增加并产生一次新站内通知；只切换方式也增加修订并取消旧邮件任务；重复扫描、进程重启、陈旧修订与取消并发不重复生成同一修订的站内通知或邮件任务 |
 | U06 取消说明 | §6.3、§11.8 | 双方能读取 cancellationReason；取消通知引用事件并可打开，取消事件可按筛选查询；取消后 pending 提案和双方待发提醒一并清理 |
 | U07 改期提示 | §7.2、§11.7 | 仅提议者有提醒、仅接受者有提醒、双方都有提醒分别测试；每位有 PENDING 提醒者收到自己的检查提示，原提醒时间不变，互不泄露 |
 | U08 承诺来源 | §7.1、§10、§11.3 | 表达、卡片和事件均可从详情创建自己的承诺；按 sourceType 打开正确资源；撤回、删源、撤销分享或解除后显示“来源不可用”，对方不能借分享承诺越权 |
 
 上述场景还须覆盖单人未连接流程，以及解除后重新连接同一账号仍无法访问旧表达、邀约、共同事件、分享评论和旧通知。草稿在重新连接后不能自动改发给新连接；浏览器演示身份切换不能替代两个真实 Session 的权限测试。
+
+### 邮件提醒与队列验收清单
+
+以下场景为后续实现的验收要求，本轮仅完成可行性评估与设计，不代表已通过 SMTP 或运行时测试。失败与并发场景使用可控制的测试 SMTP 服务，不向真实用户反复发送测试邮件。
+
+| 场景 | 必须验证的结果 |
+| --- | --- |
+| 两种方式 | 三类可提醒资源均可选择两种方式；默认 IN_APP；IN_APP 只有站内通知，组合方式同一站内通知加一条 MAIL 任务；共同事件双方的方式和邮箱互不可见 |
+| 事务与去重 | 在通知插入、入队、置 FIRED 各处注入回滚，三者不能部分提交；重复扫描和服务重启不重复入队；不回溯发送既有通知 |
+| 失败与重试 | SMTP 临时故障/限流按退避重试，认证或地址永久错误、次数耗尽标记 FAILED；每次只重试邮件；站内仍可读，通知列表可见脱敏邮件状态 |
+| 领取与恢复 | 并发消费者只能领取同一有效租约一次；领取后宕机、SMTP 前宕机可在租约过期后恢复；旧 token 不能续租或回写覆盖新状态，不让一封慢邮件阻塞站内扫描 |
+| 发送结果不明 | SMTP 接受后、回写前宕机，以及 SMTP 接受响应丢失时，只保留一条站内通知与邮件任务，允许重试导致邮件重复；SENT 显示为服务器已接受，不误称收件人已读 |
+| 修订与取消 | 改时间、只改方式、取消后重设均取消旧任务；FIRED 但邮件仍在队列/重试时可取消；完成承诺、取消事件、删除、撤销分享和解除后不会重新领取失效任务，在途发送按约定处理 |
+| 邮箱与配置 | 未启用邮件、缺少配置或本人邮箱时拒绝组合设置；保存后清空邮箱或关闭能力，到时站内照常生成、邮件明确 FAILED；改邮箱取消旧地址任务，不转投；既有提醒迁移为 IN_APP |
+| 隐私与 SMTP | 使用拟提供的 SMTP 配置验证 TLS、认证与实际发送；邮件、任务、日志不包含私密正文或凭据；邮件仅有网站入口，旧连接或撤销分享后经入口仍无法访问原内容 |
 
 ## 13. 产品验证标准
 

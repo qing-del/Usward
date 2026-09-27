@@ -5,7 +5,7 @@
   const kinds = {MEMORY_CARD:'memory', CALENDAR_EVENT:'event', COMMITMENT:'commitment'};
   const collections = {MEMORY_CARD:'memories', CALENDAR_EVENT:'events', COMMITMENT:'commitments'};
   const actions = {MEMORY_CARD:'memory-view', CALENDAR_EVENT:'event-view', COMMITMENT:'commitment-view'};
-  const modes = {IN_APP:'站内提醒', IN_APP_AND_MAIL:'站内提醒 + Mail 提醒'};
+  const modes = {IN_APP:'站内通知', IN_APP_AND_MAIL:'站内通知+邮件通知'};
   const statuses = {QUEUED:'等待发送', PROCESSING:'正在处理', SENT:'邮件服务器已接受', FAILED:'发送失败', CANCELLED:'已取消'};
   const failures = {
     RECIPIENT_EMAIL_MISSING:'触发时尚未设置收件邮箱。站内提醒已保留。',
@@ -39,7 +39,7 @@
     if (!config.enabled) return {available:false, reason:'部署尚未启用邮件提醒。可以继续使用站内提醒。', code:'MAIL_DISABLED'};
     if (!config.configured) return {available:false, reason:'部署邮件配置不完整。请由维护者完成配置，或选择站内提醒。', code:'MAIL_CONFIG_INCOMPLETE'};
     if (!U.validNotificationEmail(U.state.user.notificationEmail)) return {available:false, reason:'先在“我的”设置本人收件邮箱，才可选择 Mail 提醒。', code:'RECIPIENT_EMAIL_MISSING'};
-    return {available:true, reason:'邮件只发给你，不会随内容分享给对方。', code:null};
+    return {available:true, reason:'自己的到时提醒只发给你；互动通知的两个方向另外选择。', code:null};
   };
   U.reminderModeLabel = mode => modes[mode] || modes.IN_APP;
   U.getReminder = (type, id, recipient = U.state.user.username) => (U.state.reminders || []).find(r => r.resourceType === type && r.resourceId === id && r.recipient === recipient) || null;
@@ -98,28 +98,30 @@
     s.reminders.forEach(syncLegacy);
   };
 
-  U.reminderFields = (type, id = '', {label='私人提醒时间', clearable=true} = {}) => {
+  U.reminderFields = (type, id = '', {label='私人提醒时间'} = {}) => {
     const reminder = id && U.getReminder(type,id);
-    const capability = U.mailCapability();
-    const mode = reminder?.deliveryMode || 'IN_APP';
-    const time = reminder?.status === 'PENDING' ? U.local(reminder.scheduledAt) : '';
-    return `<fieldset class="reminder-fields"><legend>${icon('bell',15)}只提醒我自己 <small>可选</small></legend>${U.field('reminder',label+(clearable?' <small>留空可取消</small>':''),'datetime-local',time)}<div class="field"><label for="f-deliveryMode">提醒方式</label><select id="f-deliveryMode" name="deliveryMode" aria-describedby="reminder-mode-help"><option value="IN_APP" ${mode==='IN_APP'?'selected':''}>站内提醒</option><option value="IN_APP_AND_MAIL" ${mode==='IN_APP_AND_MAIL'?'selected':''} ${capability.available?'':'disabled'}>站内提醒 + Mail 提醒${capability.available?'':'（暂不可用）'}</option></select><p class="quiet-note" id="reminder-mode-help">${esc(capability.reason)}${capability.code==='RECIPIENT_EMAIL_MISSING'?' <a class="text-link" href="me.html#email">设置收件邮箱 '+icon('arrow',12)+'</a>':''}</p></div>${reminder&&reminder.status!=='PENDING'?`<p class="quiet-note">上次提醒${reminder.status==='FIRED'?'已触发':'已取消'}。重新设置会建立新的提醒计划。</p>`:''}<p class="quiet-note">留空不会创建提醒。Mail 提醒只含通用文案和网站入口；当前预览不会发送真实邮件。</p></fieldset>`;
+    const pending = reminder?.status === 'PENDING';
+    const mode = pending ? reminder.deliveryMode : 'NONE';
+    const time = pending ? U.local(reminder.scheduledAt) : '';
+    return `<fieldset class="reminder-fields"><legend>${icon('bell',15)}自己的到时提醒 <small>可选</small></legend>${U.notificationModeField('deliveryMode','到时通知我',mode)}${U.field('reminder',label,'datetime-local',time)}${reminder&&!pending?`<p class="quiet-note">上次提醒${reminder.status==='FIRED'?'已触发':'已取消'} · 历史方式：${esc(U.reminderModeLabel(reminder.deliveryMode))}。重新开启需要明确选择方式与时间。</p>`:''}<p class="quiet-note">不通知不会创建计划；选择站内或邮件通知时必须填写时间。选择不通知或清空已有时间会取消提醒及未完成的提醒邮件。邮件只含通用文案，预览不发送真实邮件。</p></fieldset>`;
   };
   U.bindReminderFields = form => {
     const time = form.elements.namedItem('reminder');
     const mode = form.elements.namedItem('deliveryMode');
     if (!time || !mode) return;
-    const update = () => {mode.disabled = !time.value;};
-    time.addEventListener('input',update);
+    const update = () => {time.disabled=mode.value==='NONE';time.required=mode.value!=='NONE';};
+    mode.addEventListener('change',update);
+    time.addEventListener('input',()=>{if(!time.value){mode.value='NONE';update();}});
     update();
   };
   U.validateReminderValues = values => {
-    if (!values.reminder) return null;
+    const mode = values.deliveryMode || (values.reminder?'IN_APP':'NONE');
+    if (mode==='NONE') return null;
+    if (!values.reminder) return '选择通知方式后，请填写私人提醒时间。';
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(values.reminder)) return '请选择有效的提醒时间。';
     try {if (!Number.isFinite(Date.parse(U.fromLocal(values.reminder)))) return '请选择有效的提醒时间。';}
     catch (_) {return '请选择有效的提醒时间。';}
-    const mode = values.deliveryMode || 'IN_APP';
-    if (!modes[mode]) return '请选择站内提醒或站内提醒 + Mail 提醒。';
+    if (!modes[mode]) return '请选择不通知、站内通知或站内通知+邮件通知。';
     if (mode === 'IN_APP_AND_MAIL' && !U.mailCapability().available) return U.mailCapability().reason+' 提醒输入已保留，请修改后重新保存。';
     return null;
   };
@@ -127,7 +129,7 @@
     const error = U.validateReminderValues(values);
     if (error) return error;
     let reminder = U.getReminder(type,id);
-    if (!values.reminder) {U.cancelReminder(reminder); return null;}
+    if (values.deliveryMode==='NONE'||!values.reminder) {U.cancelReminder(reminder); return null;}
     const probe = reminder || {resourceType:type,resourceId:id};
     if (!visibleTo(probe) || closed(probe)) return '这个内容已不可设置提醒。';
     if (reminder) {U.cancelMailTasks(d => d.reminderId === reminder.id); reminder.revision += 1;}
@@ -148,7 +150,7 @@
     U.form('只提醒我自己',U.reminderFields(type,id),v => {
       const error = U.saveReminder(type,id,v);
       if (error) return error;
-      U.toast(v.reminder?'私人提醒已保存':'私人提醒已取消');
+      U.toast(v.deliveryMode!=='NONE'&&v.reminder?'私人提醒已保存':'私人提醒已取消');
     },{label:'保存提醒',draft:`reminder-${type}-${id}`,eyebrow:'ONLY FOR ME'});
   };
   const bySchedule = (a,b) => Date.parse(a.scheduledAt)-Date.parse(b.scheduledAt) || a.id.localeCompare(b.id);
@@ -178,21 +180,13 @@
       if (r.status !== 'PENDING' || Date.parse(r.scheduledAt) > Date.now()) return;
       const dedupeKey = `reminder:${r.id}:${r.revision}`;
       if (!U.state.notifications.some(n => n.dedupeKey===dedupeKey)) {
-        const notification = {id:U.uid('n'),kind:kinds[r.resourceType],resourceId:r.resourceId,message:'你设置的私人提醒到了',recipient:r.recipient,read:false,at:new Date().toISOString(),dedupeKey,reminderId:r.id,reminderRevision:r.revision};
-        U.state.notifications.unshift(notification);
-        if (r.deliveryMode === 'IN_APP_AND_MAIL') {
-          const config = U.state.previewMail;
-          const email = person(r.recipient)?.notificationEmail;
-          const failureCode = !U.validNotificationEmail(email)?'RECIPIENT_EMAIL_MISSING':!config.enabled?'MAIL_DISABLED':!config.configured?'MAIL_CONFIG_INCOMPLETE':null;
-          U.state.mailDeliveries.push({id:U.uid('delivery'),notificationId:notification.id,reminderId:r.id,reminderRevision:r.revision,recipient:r.recipient,recipientEmail:email||null,status:failureCode?'FAILED':'QUEUED',failureCode,sentAt:null,nextAttemptAt:null,attemptCount:0});
-        }
+        U.queueNotification({type:r.resourceType,id:r.resourceId,message:'你设置的私人提醒到了',recipient:r.recipient,mode:r.deliveryMode,sourceType:'REMINDER_DUE',dedupeKey,reminder:r});
       }
       r.status = 'FIRED';syncLegacy(r);changed=true;
     });
     U.state.mailDeliveries.forEach(d => {
       if (!unfinished(d)) return;
-      const r = U.state.reminders.find(r => r.id===d.reminderId);
-      if (!r || r.revision!==d.reminderRevision || r.status!=='FIRED' || !visibleTo(r,d.recipient) || closed(r) || person(d.recipient)?.notificationEmail!==d.recipientEmail) {d.status='CANCELLED';d.failureCode=null;changed=true;}
+      if (!U.mailTaskValid(d)) {d.status='CANCELLED';d.failureCode=null;changed=true;}
     });
     U.state.notifications.forEach(n => {
       if (n.invalidatedAt) return;
@@ -245,7 +239,7 @@
     const d = U.mailDelivery(n);
     if (!d) return;
     const description = d.status==='SENT'?'仅表示邮件服务器已接受，不代表已经到达收件箱或已读。':d.status==='FAILED'?failures[d.failureCode]||'邮件发送失败，站内提醒仍可查看。':d.status==='CANCELLED'?'邮件任务已取消。已开始的发送可能完成，已经发送的邮件无法收回。':d.status==='PROCESSING'?'正在处理这次邮件提醒。站内已读状态不影响邮件发送。':d.nextAttemptAt?`邮件暂时未发出，计划 ${U.time(d.nextAttemptAt)} 再次尝试。`:'邮件正在等待发送，不承诺精确到秒或严格准点送达。';
-    U.modal('我的 Mail 提醒',`<div class="detail-meta">${U.badge(statuses[d.status],d.status==='FAILED'?'peach':d.status==='SENT'?'green':'gray','mail')}${U.badge('仅本人可见','gray','lock')}</div><p class="modal-copy">${esc(description)}</p>${d.sentAt?`<p class="quiet-note mt-16">服务器接受时间 · ${U.date(d.sentAt)} ${U.time(d.sentAt)}</p>`:''}<div class="mail-message-preview mt-24"><p class="eyebrow">邮件内容预览</p><h3>Usward · 你设置的提醒已到</h3><p>你设置的提醒已到，请登录 Usward 查看。</p><a href="index.html" class="text-link">打开 Usward ${icon('arrow',13)}</a></div><p class="quiet-note mt-16">邮件只有通用文案和网站入口，不包含标题、正文、回应或地点。网站入口仍需登录。</p><div class="inline-note mt-16">${icon('info',16)}当前是本地投递状态演示，不会发送真实邮件。</div>`,{eyebrow:'JUST FOR YOU'});
+    U.modal('我的 Mail 提醒',`<div class="detail-meta">${U.badge(statuses[d.status],d.status==='FAILED'?'peach':d.status==='SENT'?'green':'gray','mail')}${U.badge('仅本人可见','gray','lock')}</div><p class="modal-copy">${esc(description)}</p>${d.sentAt?`<p class="quiet-note mt-16">服务器接受时间 · ${U.date(d.sentAt)} ${U.time(d.sentAt)}</p>`:''}<div class="mail-message-preview mt-24"><p class="eyebrow">邮件内容预览</p><h3>Usward · ${d.sourceType==='BUSINESS'?'你收到一条新通知':d.sourceType==='REMINDER_CHECK'?'安排有变化':'你设置的提醒已到'}</h3><p>${d.sourceType==='BUSINESS'?'你收到一条新通知，请登录 Usward 查看。':d.sourceType==='REMINDER_CHECK'?'安排有变化，请登录检查自己的提醒。':'你设置的提醒已到，请登录 Usward 查看。'}</p><a href="index.html" class="text-link">打开 Usward ${icon('arrow',13)}</a></div><p class="quiet-note mt-16">邮件只有通用文案和网站入口，不包含标题、正文、回应或地点。网站入口仍需登录。</p><div class="inline-note mt-16">${icon('info',16)}当前是本地投递状态演示，不会发送真实邮件。</div>`,{eyebrow:'JUST FOR YOU'});
   };
   U.updateNotificationEmail = email => {
     const value = email.trim();
@@ -256,7 +250,7 @@
     return null;
   };
   U.actions['email-edit'] = () => {
-    U.form('我的通知收件邮箱',`${U.field('email','通知收件邮箱 <small>留空可清除</small>','email',U.state.user.notificationEmail||'','例如：linan@example.com','maxlength="254" autocomplete="email"')}<p class="quiet-note">请确认这是你本人可接收邮件的地址。邮箱仅用于你主动设置的到时提醒，不作为登录账号，也不向对方公开。</p><div class="inline-note">${icon('mail',16)}设置邮箱不会自动开启所有提醒的邮件发送；请在每次设置提醒时选择方式。</div><p class="quiet-note">更换或清空邮箱，会取消尚未完成的旧地址邮件任务。已有提醒的时间与方式保留，旧邮件不会转投新地址。</p><p class="quiet-note">预览只保存本地演示设置，不验证邮箱，也不发送邮件。</p>`,v => {
+    U.form('我的通知收件邮箱',`${U.field('email','通知收件邮箱 <small>留空可清除</small>','email',U.state.user.notificationEmail||'','例如：linan@example.com','maxlength="254" autocomplete="email"')}<p class="quiet-note">请确认这是你本人可接收邮件的地址。邮箱用于他人的互动通知及你自己的到时提醒，不作为登录账号，也不向对方公开。</p><div class="inline-note">${icon('mail',16)}设置邮箱不会自动开启全部邮件；互动发起时分方向选择通知，自己的到时提醒另行设置。</div><p class="quiet-note">更换或清空邮箱，会取消尚未完成的旧地址邮件任务。已有提醒的时间与方式保留，旧邮件不会转投新地址。</p><p class="quiet-note">邮箱可以接收他人的互动通知及自己的到时提醒。预览只保存演示设置，不验证邮箱，也不发送邮件。</p>`,v => {
       const error = U.updateNotificationEmail(v.email);
       if (error) return error;
       U.toast(v.email?'通知收件邮箱已保存':'通知收件邮箱已清除');

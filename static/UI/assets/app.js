@@ -127,6 +127,7 @@
     act:(action,id='',label='查看',cls='text-link') => `<button class="${cls}" data-action="${action}" ${id ? `data-id="${esc(id)}"` : ''}>${label}</button>`,
     footer:() => `<footer class="page-footer">${icon('leaf',12)}记住小事，也为彼此留一点时间。</footer>`
   };
+  U.replaceState = next => {state=next;U.state=state;};
   const nav = [{key:'today',label:'今天',icon:'sun',file:'index.html'},{key:'calendar',label:'日历',icon:'calendar',file:'calendar.html'},{key:'expressions',label:'表达',icon:'heart',file:'expressions.html'},{key:'memories',label:'记忆',icon:'memory',file:'memories.html'},{key:'me',label:'我的',icon:'user',file:'me.html'}];
   U.nav = nav;
   U.occursOn=(e,day)=>e.allDay?e.startDate<=day&&e.endDate>day:Date.parse(e.start)<Date.parse(U.fromLocal(U.addDay(day,1)+'T00:00'))&&Date.parse(e.end)>Date.parse(U.fromLocal(day+'T00:00'));
@@ -202,8 +203,10 @@
   U.form=(title,fields,onSubmit,{label='保存',draft='',wide=false,extra='',eyebrow='KEEP A LITTLE THING'}={}) => {
     U.modal(title,`<form id="dialog-form" class="form-stack">${fields}<p class="form-message" role="alert"></p><div class="form-actions">${extra}<button type="button" class="btn secondary" data-action="close">取消</button><button class="btn primary" type="submit">${esc(label)}</button></div>${draft?'<p class="draft-note">关闭后会保留草稿，回来可以接着写。</p>':''}</form>`,{wide,eyebrow});
     const form=document.querySelector('#dialog-form');
+    form.dataset.operationKey=U.operationKey?U.operationKey():U.uid('operation');
     if(draft&&state.drafts[draft])Object.entries(state.drafts[draft]).forEach(([name,value])=>{const el=form.elements.namedItem(name);if(el && !(el instanceof RadioNodeList)){if(el.type==='checkbox')el.checked=!!value;else el.value=value;}});
     if(U.bindReminderFields)U.bindReminderFields(form);
+    if(U.bindNotificationFields)U.bindNotificationFields(form);
     const serialize=()=>{const values=Object.fromEntries(new FormData(form).entries());form.querySelectorAll('input[type=checkbox]').forEach(el=>values[el.name]=el.checked);const mode=form.elements.namedItem('deliveryMode');if(mode)values.deliveryMode=mode.value;return values;};
     if(draft)form.addEventListener('input',()=>{state.drafts[draft]=serialize();save();});
     form.addEventListener('submit',event=>{

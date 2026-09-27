@@ -1,45 +1,9 @@
 // Deterministic local-state regression tests. No browser, API or SMTP access.
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
+const {preview}=require('./helpers/preview.cjs');
 
-function preview(saved) {
-  let now = Date.parse('2026-09-27T12:00:00Z');
-  class Clock extends Date {
-    constructor(...args) {super(...(args.length ? args : [now]));}
-    static now() {return now;}
-  }
-  const storage = new Map(saved ? [['usward-preview-v1', saved]] : []);
-  const timeForm = {
-    elements: Object.fromEntries(['allDay','start','end','startDate','lastDate'].map(name => [name,{checked:false,addEventListener(){}}])),
-    querySelector: () => ({hidden:false})
-  };
-  const context = vm.createContext({
-    Date:Clock, Intl, console,
-    localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
-    document:{body:{dataset:{page:'today'}},hidden:false,addEventListener(){},querySelector:selector=>selector==='#dialog-form'?timeForm:null},
-    location:{hash:'',replace(){}},setInterval(){},setTimeout(){},addEventListener(){}
-  });
-  context.window = context;
-  const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname,'../assets',file),'utf8'),context,{filename:file});
-  load('app.js');load('reminders.js');load('today.js');load('me.js');load('commitments.js');
-  const U = context.U;
-  const env = {U,load,advance:ms=>{now+=ms;},saved:()=>{U.save();return storage.get('usward-preview-v1');}};
-  U.close = () => {};
-  U.toast = (message,error) => {env.toast={message,error};};
-  U.modal = (title,html) => {env.modal={title,html};};
-  U.render = () => {env.renders=(env.renders||0)+1;U.refreshReminders();};
-  U.confirm = (title,copy,label,confirm) => {env.confirm=confirm;};
-  U.form = (title,html,submit,options) => {env.form={title,html,submit,options};return timeForm;};
-  env.submit = values => {
-    const result=env.form.submit(values,timeForm);
-    if(typeof result!=='string' && result!==false){U.save();U.render();}
-    return result;
-  };
-  return env;
-}
+
 const past = '2026-09-27T19:00';
 const future = '2026-09-28T10:00';
 function arm(U,type,id,time=past,mode='IN_APP_AND_MAIL') {
@@ -192,7 +156,7 @@ test('account switch hides the other email, reminder settings and mail status',(
   assert.equal(U.getReminder('MEMORY_CARD','m2'),null);
   assert.equal(U.mailDelivery(n),null);assert.equal(U.notificationVisible(n),false);
   const fields=U.reminderFields('MEMORY_CARD','m2');
-  assert.match(fields,/IN_APP" selected/);assert.ok(!fields.includes('linan@example.com'));
+  assert.match(fields,/NONE" selected/);assert.ok(!fields.includes('linan@example.com'));
   const other=arm(U,'MEMORY_CARD','m2',future,'IN_APP');
   U.switchAccount('linan');U.prepareReminders();
   assert.equal(U.getReminder('MEMORY_CARD','m2').id,own.id);
@@ -311,7 +275,7 @@ test('home includes partner cards, both event kinds and own commitments, ordered
   const pending=U.pendingReminders();assert.deepEqual(Array.from(pending,r=>r.resourceId),['m6','e1','e2','c1']);
   const html=U.pages.today();
   assert.ok(html.indexOf('周末想做的小事')<html.indexOf('日历安排 · 9月28日 10:00'));
-  assert.match(html,/查看全部 · 4 条/);assert.match(html,/站内提醒 \+ Mail 提醒/);
+  assert.match(html,/查看全部 · 4 条/);assert.match(html,/站内通知\+邮件通知/);
   U.cancelResourceReminders('CALENDAR_EVENT','e1');assert.equal(U.pendingReminders().length,3);
 });
 

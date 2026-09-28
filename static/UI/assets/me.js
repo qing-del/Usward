@@ -60,8 +60,21 @@
     if(!U.connected())return;U.modal('解除连接前，先看看这些变化',`<p class="modal-copy">任一方都可以解除连接，无需对方批准。</p><ul class="connection-impact"><li><strong>立即停止共同访问</strong><p>共享访问、忙闲展示、待处理邀约和跨用户提醒立即停止，失去访问权限的未完成邮件任务会取消。</p></li><li><strong>自己的记录会保留</strong><p>自己写的卡片与承诺恢复为私密，清除分享关系。</p></li><li><strong>旧共同内容不再提供访问</strong><p>表达与回应、邀约、共同安排封存。共同安排不会自动复制到个人日历。</p></li><li><strong>新连接从新的选择开始</strong><p>新的连接不会继承旧连接内容。</p></li></ul><div class="inline-note peach">${icon('info',16)}解除不是删除。正式部署的数据库备份可能仍保留历史内容。</div><div class="form-actions"><button class="btn secondary" data-action="close">保留连接</button><button class="btn danger" data-action="connection-end-confirm">我已了解，继续</button></div>`,{eyebrow:'YOUR SPACE, YOUR CHOICE'});
   };
   U.actions['connection-end-confirm']=()=>U.confirm('确认解除与 '+U.state.partner.name+' 的连接？','解除会立即生效。个人记录仍保留，旧共同空间将不可访问。','确认解除连接',()=>{
-    const s=U.state,old=s.connectionId;s.connected=false;s.connectionId=null;s.user.shareAvailability=false;s.partner.shareAvailability=false;s.availability=[];s.inviteToken=null;s.connectionInvites.forEach(t=>{if(t.status==='ACTIVE')t.status='REVOKED';});s.events.filter(e=>e.kind==='PERSONAL').forEach(e=>e.shareTitle=false);
-    s.memories.filter(m=>m.connectionId===old).forEach(m=>{m.shared=false;m.connectionId=null;m.comments=[];m.privateReminders={};m.firedPrivateReminders={};});s.commitments.filter(c=>c.connectionId===old).forEach(c=>{c.shared=false;c.connectionId=null;});
-    s.invitations.filter(i=>i.connectionId===old&&i.status==='PENDING').forEach(i=>i.status='WITHDRAWN');s.events.filter(e=>e.connectionId===old).forEach(e=>{e.reminder='';e.pendingChange=null;e.sealed=true;});U.save();U.close();U.view={};U.render();U.toast('已解除连接，个人记录仍保留');
+    const s=U.state,old=s.connectionId,memories=s.memories.filter(m=>m.connectionId===old),events=s.events.filter(e=>e.connectionId===old),commitments=s.commitments.filter(c=>c.connectionId===old),expressions=s.expressions.filter(x=>x.connectionId===old),invitations=s.invitations.filter(i=>i.connectionId===old);
+    memories.forEach(m=>{const author=m.owner==='me'?s.user.username:s.partner.username;U.cancelResourceReminders('MEMORY_CARD',m.id,r=>r.recipient!==author);});
+    events.forEach(e=>U.cancelResourceReminders('CALENDAR_EVENT',e.id));
+    const oldResources=new Set([...memories.map(m=>`MEMORY_CARD:${m.id}`),...events.map(e=>`CALENDAR_EVENT:${e.id}`),...commitments.map(c=>`COMMITMENT:${c.id}`),...expressions.map(x=>`EXPRESSION:${x.id}`),...invitations.map(i=>`CALENDAR_INVITATION:${i.id}`)]);
+    s.notificationSettings=s.notificationSettings.filter(setting=>!oldResources.has(`${setting.resourceType}:${setting.resourceId}`));
+    s.notificationOperations=s.notificationOperations.filter(operation=>!oldResources.has(`${operation.result?.type}:${operation.result?.id}`));
+    const sharedDraft=/^(expression-new|invitation-new|reply-|comment-|counter-|change-)/;
+    [s.drafts,...Object.values(s.draftsByUser||{})].forEach(bag=>Object.keys(bag||{}).filter(key=>sharedDraft.test(key)&&(!key.includes('@')||key.endsWith('@'+old))).forEach(key=>delete bag[key]));
+    s.connected=false;s.connectionId=null;s.user.shareAvailability=false;s.partner.shareAvailability=false;s.availability=[];
+    s.connectionInvites.forEach(token=>{if(token.status==='PENDING'){token.status='REVOKED';token.version+=1;}});
+    s.events.filter(e=>e.kind==='PERSONAL').forEach(e=>e.shareTitle=false);
+    memories.forEach(m=>{m.shared=false;m.connectionId=null;m.comments=[];m.privateReminders={};m.firedPrivateReminders={};m.version+=1;});
+    commitments.forEach(c=>{c.shared=false;c.connectionId=null;c.version+=1;});
+    invitations.filter(i=>i.status==='PENDING').forEach(i=>{i.status='WITHDRAWN';i.version+=1;});
+    events.forEach(e=>{e.reminder='';e.pendingChange=null;e.sealed=true;e.version+=1;});
+    U.refreshReminders();U.save();U.close();U.view={};U.render();U.toast('已解除连接，个人记录仍保留');
   },true);
 })();

@@ -18,7 +18,7 @@
       ${U.connected()?`<section><div class="section-header"><div class="section-title">${icon('link',16)}<h2>我们的邀约</h2></div><button class="text-link" data-action="invitations-list">查看全部 ${icon('arrow',12)}</button></div><div class="card flat invitation-history">${invitations.length?invitations.map(i=>`<button class="invitation-history-item" data-action="invite-view" data-id="${i.id}"><span><strong>${esc(i.title)}</strong><small>${U.date(i.start)} ${U.time(i.start)}</small></span>${U.badge(U.inviteLabels[i.status],i.status==='PENDING'?'peach':'gray')}${icon('chevron',13)}</button>`).join(''):'<p class="quiet-note">没有邀约。你们可以慢慢商量。</p>'}</div></section>`:''}
       <section class="card soft"><span class="quote-mark">“</span><p class="serif expression-quote">回应可以慢一点，<br>心意依然在这里。</p><p class="quiet-note mt-16">这里没有在线状态或已读回执，也不会自动替你催促。回应只表示已经回应，不代表感受已经解决。</p></section></aside></div>`;
   };
-  U.actions['expression-preset']=({value})=>{if(!U.connected())return U.connectionRequired();U.state.drafts['expression-new']={...U.state.drafts['expression-new'],type:value};U.save();U.expressionForm();};
+  U.actions['expression-preset']=({value})=>{if(!U.connected())return U.connectionRequired();const draft=U.sharedDraftKey('expression-new');U.state.drafts[draft]={...U.state.drafts[draft],type:value};U.save();U.expressionForm();};
   U.actions['expression-tab']=({value})=>{U.view.expressions.tab=value;U.view.expressions.page=1;U.render();};
   document.addEventListener('change',event=>{if(event.target.name==='expressionStatus'){U.view.expressions.status=event.target.value;U.view.expressions.page=1;U.render();}});
 })();

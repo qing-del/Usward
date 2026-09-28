@@ -99,6 +99,7 @@
     currentDay:() => isoDay(new Date(),state.user.timezone),
     overdue:c => c.status==='OPEN' && (c.dueAt ? Date.parse(c.dueAt)<Date.now() : !!c.due && c.due<U.currentDay()),
     connected:() => state.connected && !!state.connectionId,
+    sharedDraftKey:key => `${key}@${state.connectionId||'no-connection'}`,
     shared:resource => U.connected() && resource.connectionId === state.connectionId,
     memoryVisible:m => !m.deleted && (m.owner === 'me' || (m.shared && U.shared(m))),
     commitmentVisible:c => !c.deleted && (c.owner === 'me' || (c.shared && U.shared(c))),
@@ -291,14 +292,14 @@
       const error=U.submitNotified(form,v,{action:'memory-comment',resourceType:'MEMORY_CARD',id,followUp:true,message:'对方为你的记忆留下补充 / 更正'},()=>{
         const current=U.find('memories',id),now=new Date().toISOString();current.comments.push({id:U.uid('comment'),author:'me',body:v.body,at:now});current.version+=1;current.updatedAt=now;return {type:'MEMORY_CARD',id};
       });if(error)return error;U.toast('补充已保存，原文保持不变');
-    },{draft:`comment-${id}`,label:'提交补充'});
+    },{draft:U.sharedDraftKey(`comment-${id}`),label:'提交补充'});
   };
   U.actions['commitment-from-memory']=({id})=>U.commitmentForm(null,{sourceType:'memory',sourceId:id});
 
   /* Expressions have response status, never read receipts or deadlines. */
   U.expressionForm=()=>{
     if(!U.connected())return U.connectionRequired();
-    const selected=state.drafts['expression-new']?.type||U.presets[0];
+    const draft=U.sharedDraftKey('expression-new'),selected=state.drafts[draft]?.type||U.presets[0];
     const form=U.form('把想说的话，轻轻说出来',`<div class="expression-choices">${U.presets.map((p,i)=>`<label class="expression-choice"><input type="radio" name="type" value="${esc(p)}" ${p===selected?'checked':''}><span>${icon(['heart','chat','leaf','info','cup','edit'][i],18)}${esc(p)}</span></label>`).join('')}</div>${U.field('body','想多说一点 <small>前五项可跳过；自由留言必填</small>','textarea','','可以只选一种表达，也可以写几句话。')}<details class="optional-details"><summary>希望何时、怎样回应 · 可选</summary><div class="form-grid">${U.select('window','希望回应时间',['有空再看','今天聊聊','现在方便吗'],'有空再看')}${U.select('mode','希望回应方式',[['','不特别指定'],...['听我说','一起想办法','陪我一下','暂时只想告诉你']],'')}</div></details><div class="inline-note">${icon('leaf',16)}这些只是你的偏好。没有回应倒计时，也不会自动催促。</div>${U.notificationPlanFields('EXPRESSION')}`, (v,form)=>{
       if(v.type==='自由留言'&&!v.body)return '自由留言需要填写正文。';
       if(!U.presets.includes(v.type))return '请选择一种表达。';
@@ -306,9 +307,9 @@
         const now=new Date().toISOString(),x={id:U.uid('x'),sender:'me',type:v.type,body:v.body,window:v.window,mode:v.mode,status:'OPEN',replies:[],createdAt:now,updatedAt:now,version:1,connectionId:state.connectionId};
         state.expressions.unshift(x);return {type:'EXPRESSION',id:x.id};
       });if(error)return error;U.toast('表达已存入发出列表');
-    },{draft:'expression-new',label:'发送给 '+state.partner.name,eyebrow:'A LITTLE EXPRESSION',wide:true});
+    },{draft,label:'发送给 '+state.partner.name,eyebrow:'A LITTLE EXPRESSION',wide:true});
     // Radios are restored separately because namedItem returns a RadioNodeList.
-    if(state.drafts['expression-new']?.type)form.querySelectorAll('[name=type]').forEach(el=>el.checked=el.value===selected);
+    if(state.drafts[draft]?.type)form.querySelectorAll('[name=type]').forEach(el=>el.checked=el.value===selected);
   };
   U.expressionDetail=id=>{
     const x=U.find('expressions',id);if(!x||!U.expressionVisible(x))return U.toast('这条表达已不可访问',true);
@@ -327,7 +328,7 @@
         if(current.sender!=='me')current.status='RESPONDED';current.version+=1;current.updatedAt=now;
         return {type:'EXPRESSION',id};
       });if(error)return error;U.toast(mine?'已追加补充':'回应已保存');
-    },{draft:body?'':`reply-${id}`,label:mine?'保存补充':'发送回应',eyebrow:'TAKE YOUR TIME'});
+    },{draft:body?'':U.sharedDraftKey(`reply-${id}`),label:mine?'保存补充':'发送回应',eyebrow:'TAKE YOUR TIME'});
   };
   U.actions['expression-new']=U.expressionForm;U.actions['expression-view']=({id})=>U.expressionDetail(id);
   U.actions['expression-quick-reply']=({id,value})=>{const x=U.find('expressions',id);if(x&&x.sender!=='me')U.expressionReplyForm(id,value);};
@@ -414,7 +415,7 @@
         const target=invitation.targetEventId&&U.find('events',invitation.targetEventId);if(target)target.pendingChange=invitation.id;
         return {type:'CALENDAR_INVITATION',id:invitation.id};
       });if(error)return error;U.toast(event?'修改提案已发出，原安排保持有效':previous?'新提议已发出，等待对方确认':'邀约已发出，等待对方确认');
-    },{draft:eventId?`change-${eventId}`:previousId?`counter-${previousId}`:'invitation-new',label:previous?'发出新提议':'发送邀约',eyebrow:'MAKE ROOM FOR US'});
+    },{draft:U.sharedDraftKey(eventId?`change-${eventId}`:previousId?`counter-${previousId}`:'invitation-new'),label:previous?'发出新提议':'发送邀约',eyebrow:'MAKE ROOM FOR US'});
     U.bindTimeForm(document.querySelector('#dialog-form'));
   };
   U.conflicts=i=>{

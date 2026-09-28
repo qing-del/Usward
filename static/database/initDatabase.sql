@@ -236,10 +236,10 @@ CREATE TABLE IF NOT EXISTS commitment (
 
 -- 每用户每资源保留一条提醒记录，设置/重设（含仅改方式）及实际取消时递增 revision，取消后保留行。
 -- 扫描 PENDING 且 scheduled_at <= 当前 UTC 时间的全部记录，不限于当前分钟。
--- 按连接、用户、业务资源、提醒、通知、投递任务顺序加锁，重新校验修订、状态与权限。
+-- 按连接、用户、业务资源、通知设置、提醒、通知、投递任务顺序加锁，重新校验修订、状态与权限。
 -- 插入站内通知、按组合方式创建邮件任务及提醒置 FIRED 必须同事务；SMTP 在提交后由独立消费者执行。
 -- 提醒通知 dedupe_key 为 reminder:<id>:<revision>，邮件任务按通知与渠道去重，防止重复生成。
--- 重设、取消及业务清理同事务取消相关 QUEUED/PROCESSING 邮件任务并清空租约，包含已 FIRED 提醒生成的任务。
+-- 重设、取消及业务清理同事务取消相关 REMINDER_DUE/REMINDER_CHECK 的 QUEUED/PROCESSING 邮件任务并清空 token 和租约，包含已 FIRED 提醒生成的任务。
 -- reminder：用户为资源设置的私人提醒。
 CREATE TABLE IF NOT EXISTS reminder (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '提醒主键',
@@ -247,9 +247,9 @@ CREATE TABLE IF NOT EXISTS reminder (
     resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '提醒资源类型；应用层校验MEMORY_CARD=卡片、CALENDAR_EVENT=事件、COMMITMENT=承诺',
     resource_id BIGINT NOT NULL COMMENT '资源主键；应用层校验>0及接收者当前访问权限，COMMITMENT须属于接收者且为OPEN，CALENDAR_EVENT不能已取消，MEMORY_CARD不能已删除；扫描触发前重新校验',
     scheduled_at DATETIME(6) NOT NULL COMMENT 'UTC 绝对提醒时间；事件改期不自动修改',
-    delivery_mode VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IN_APP' COMMENT '私人提醒方式；应用层校验IN_APP=站内提醒（默认）、IN_APP_AND_MAIL=站内提醒加邮件，不支持单独邮件；组合方式保存时须本人有效邮箱及部署邮件能力可用，到时仅向本人发送通用邮件',
-    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，首次为1，每次设置/重设（含相同时刻或仅改方式）及实际取消时递增，业务清理取消PENDING亦递增；合法重复取消、触发与事件改期不递增；重设同事务取消旧修订未完成邮件任务，取消同事务清理所有未完成邮件任务（含FIRED所生成任务）并使token失效',
-    status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT '提醒状态；应用层校验PENDING=待触发、FIRED=到时处理已持久化（不代表邮件已送达）、CANCELLED=已取消；业务清理同时取消相关未完成邮件任务，重新分享、打开或连接均不自动恢复',
+    delivery_mode VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IN_APP' COMMENT '私人提醒方式；应用层校验IN_APP=站内提醒（默认）、IN_APP_AND_MAIL=站内提醒加邮件，不支持单独邮件；NONE通过取消表达，不写入此列；组合方式保存时须本人有效邮箱及部署邮件能力可用，到时与改期检查提示均仅向本人发送通用邮件',
+    revision BIGINT NOT NULL DEFAULT 1 COMMENT '提醒计划修订号；应用层校验>=1，首次为1，每次设置/重设（含相同时刻或仅改方式）及实际取消时递增，业务清理取消PENDING亦递增；合法重复取消、触发与事件改期不递增；重设同事务取消旧修订REMINDER_DUE/REMINDER_CHECK未完成邮件任务，取消同事务清理本提醒两种来源的未完成任务（含FIRED所生成）并使token失效',
+    status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'PENDING' COMMENT '提醒状态；应用层校验PENDING=待触发、FIRED=到时处理已持久化（不代表邮件已送达）、CANCELLED=已取消；改期检查提示不改变状态，业务清理同时取消本提醒两种来源的未完成邮件任务，重新分享、打开或连接均不自动恢复',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
@@ -260,6 +260,42 @@ CREATE TABLE IF NOT EXISTS reminder (
     KEY idx_reminder_resource_status (resource_type, resource_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='资源级私人提醒';
 
+-- 本人后续通知设置仅适用于当前连接内的有效分享卡片、表达、邀约和共同事件；失权时同事务清理，旧连接设置不继承。
+-- 设置修改只影响之后生成的业务通知，不回溯修改已生成的通知或邮件任务，也不递增资源内容版本。
+-- notification_setting：本人针对互动资源保存的后续通知方式。
+CREATE TABLE IF NOT EXISTS notification_setting (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '后续通知设置主键',
+    user_id BIGINT NOT NULL COMMENT '设置所属用户，仅本人可读写；逻辑外键 app_user.id，由应用层校验关联及维护引用',
+    resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '关联资源类型；应用层校验MEMORY_CARD=当前分享卡片、EXPRESSION=当前表达、CALENDAR_INVITATION=当前邀约、CALENDAR_EVENT=当前共同事件，私人卡片与个人事件不适用',
+    resource_id BIGINT NOT NULL COMMENT '关联资源主键；应用层校验>0、本人为当前有效分享或连接的参与者，资源类型决定逻辑引用目标；同用户同资源仅一条设置',
+    connection_id BIGINT NOT NULL COMMENT '设置所属的当前有效连接；逻辑外键 pair_connection.id，由应用层校验成员与ACTIVE状态，撤销分享、资源失权或解除连接时同事务清理，不迁移到新连接',
+    follow_up_mode VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'IN_APP' COMMENT '后续互动通知方式；应用层校验NONE=不通知、IN_APP=仅站内（默认）、IN_APP_AND_MAIL=站内加邮件；只有本人可修改，选择邮件时校验本人邮箱与邮件能力，不能擅自覆盖对方设置',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
+    version BIGINT NOT NULL DEFAULT 1 COMMENT '设置乐观锁版本；应用层校验>=1，新建为1，后续本人修改以expectedVersion条件递增；与资源内容版本独立',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_notification_setting_user_resource (user_id, resource_type, resource_id),
+    KEY idx_notification_setting_connection (connection_id),
+    KEY idx_notification_setting_resource (resource_type, resource_id, user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='当前共享或连接资源的本人后续通知设置';
+
+-- 成功操作回执与业务写入、通知设置、站内通知及邮件任务同事务提交；失败回滚不留回执，NONE模式也记录成功操作。
+-- 同一操作者与幂等键重试时核对接口和请求摘要，经当前权限校验后返回结果引用，不再次执行或补发通知。
+-- notification_operation：业务写入的成功操作幂等回执。
+CREATE TABLE IF NOT EXISTS notification_operation (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '成功操作回执主键',
+    actor_id BIGINT NOT NULL COMMENT '操作发起者；逻辑外键 app_user.id，由应用层校验关联及维护引用，须与当前Session用户一致',
+    idempotency_key CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '一次逻辑提交的客户端UUID幂等键；应用层校验格式，同操作者唯一，NONE模式和资源创建同样保留成功回执',
+    request_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '请求方法、接口路径及规范化请求内容的SHA-256十六进制摘要；应用层校验格式，同键但接口或内容不同须拒绝',
+    action VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '成功的业务动作标识；应用层校验非空白且最多64字，与请求接口及目标资源一致',
+    resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本次成功操作的主结果资源类型；应用层按动作校验，业务资源引用由应用层鉴权',
+    resource_id BIGINT NOT NULL COMMENT '本次成功操作的主结果资源主键；应用层校验>0，新建资源后在同事务写入回执，不因通知模式NONE而省略',
+    result_refs JSON NOT NULL COMMENT '成功操作结果中的资源ID等引用；应用层校验仅存当前可重新鉴权的结果引用，不存私密正文、邮箱、令牌或完整响应',
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 成功回执创建时间，回执保留用于幂等重试',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_notification_operation_actor_key (actor_id, idempotency_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='包括NONE模式在内的成功业务操作幂等回执';
+
 -- notification：站内通知及已读记录。
 CREATE TABLE IF NOT EXISTS notification (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '站内通知主键',
@@ -268,10 +304,10 @@ CREATE TABLE IF NOT EXISTS notification (
     resource_type VARCHAR(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '资源类型；应用层校验MEMORY_CARD=卡片、CALENDAR_EVENT=事件、COMMITMENT=承诺、EXPRESSION=表达、CALENDAR_INVITATION=日历邀约、PAIR_CONNECTION=连接、PAIR_INVITE=连接邀请；读取时重新鉴权',
     resource_id BIGINT NOT NULL COMMENT '多态资源主键；应用层校验>0',
     message VARCHAR(255) NOT NULL COMMENT '通用文案，不存私密正文或标题；应用层校验非空白，最多255字',
-    dedupe_key VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '业务操作或提醒修订的唯一去重键；应用层校验非空白，最多191字',
+    dedupe_key VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '唯一去重键；应用层校验非空白且最多191字：BUSINESS用business:<operationId>:<kind>:<recipientId>，到时提醒用reminder:<id>:<revision>，改期检查用reminder-check:<eventId>:<eventVersion>:<reminderId>:<revision>',
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC 创建时间',
     read_at DATETIME(6) NULL COMMENT 'UTC首次已读时间，NULL为未读；应用层校验仅接收者可标记当前可见通知，重复调用保留首次时间，站内已读不取消邮件任务',
-    invalidated_at DATETIME(6) NULL COMMENT 'UTC永久失效时间，NULL表示尚未标记失效；应用层在撤回、删除、撤销分享或解除连接导致通知失去访问权时同事务写入并取消关联未完成邮件任务，禁止因再次分享或重连清空；查询先排除非空记录，仍须实时鉴权',
+    invalidated_at DATETIME(6) NULL COMMENT 'UTC永久失效时间，NULL表示尚未标记失效；应用层在撤回、删除、撤销分享或解除连接导致通知失去访问权时同事务写入并取消关联未完成邮件任务，禁止因再次分享或重连清空；仍可访问的取消或完成等业务状态通知不因资源关闭而失效；查询先排除非空记录，仍须实时鉴权',
     updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT 'UTC 更新时间',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本；应用层校验>=0，在带版本条件的更新中递增',
     PRIMARY KEY (id),
@@ -281,22 +317,24 @@ CREATE TABLE IF NOT EXISTS notification (
     KEY idx_notification_resource (resource_type, resource_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='仅含资源引用和通用文案的站内通知';
 
--- 仅为组合方式的到时提醒创建 MAIL 任务，既有通知不回溯入队；队列不保存 SMTP 凭据或私密正文。
--- 到时邮箱缺失或邮件能力不可用仍生成站内通知，邮件任务直接记 FAILED 并保存原因，不重新置提醒 PENDING。
+-- BUSINESS、REMINDER_DUE、REMINDER_CHECK 的组合方式均可创建 MAIL 任务；NONE 不创建通知或任务，既有通知不回溯入队；队列不存 SMTP 凭据或私密正文。
+-- BUSINESS 所需邮件能力在操作提交前校验；到时或改期检查自动触发时邮箱/能力缺失仍生成站内通知，邮件任务直接记 FAILED，不阻止业务或重新置提醒 PENDING。
 -- 领取与租约恢复事务仅锁任务行，按扫描索引使用 FOR UPDATE SKIP LOCKED，提交后才按业务锁顺序重新鉴权。
--- 发送前校验通知未失效、资源可访问且未关闭、提醒仍为同修订 FIRED、邮箱快照仍匹配，以及 token 与租约有效。
+-- 发送前均校验通知未失效、接收者可读资源、邮箱快照匹配、token及租约有效；REMINDER_DUE须资源未关闭且同修订FIRED，REMINDER_CHECK须未关闭且同修订PENDING或FIRED，BUSINESS不依赖提醒状态。
 -- SMTP 在事务外执行；实际发起前再次检查取消与租约，回写以 id、PROCESSING、当前 token 及有效租约为条件。
 -- 临时失败按退避重排，过期租约按剩余次数恢复；旧 token 不能覆盖取消或新 worker，SMTP 发送仍可能重复。
--- SENT/FAILED/CANCELLED 为自动终态；仅 FAILED 可经维护命令再次鉴权后人工重试，邮箱缺失任务须重新设置提醒。
+-- 资源关闭取消REMINDER_DUE/REMINDER_CHECK的未完成任务，仍可访问的取消、完成等BUSINESS任务保留；失权时取消全部相关未完成任务。
+-- SENT/FAILED/CANCELLED 为自动终态；仅 FAILED 可经维护命令按来源再次鉴权后人工重试，自动提醒因邮箱缺失失败须重新设置提醒。
 -- notification_delivery：邮件投递持久队列及尝试、租约和结果记录。
 CREATE TABLE IF NOT EXISTS notification_delivery (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '邮件投递任务主键',
-    notification_id BIGINT NOT NULL COMMENT '关联站内通知；逻辑外键 notification.id，由应用层校验关联及维护引用，须对应同一接收者、资源和提醒修订；同通知同渠道唯一',
-    reminder_id BIGINT NOT NULL COMMENT '产生任务的私人提醒；逻辑外键 reminder.id，由应用层校验关联及维护引用，资源与接收者须和关联通知一致；取消与权限清理包含FIRED所生成的未完成任务',
-    reminder_revision BIGINT NOT NULL COMMENT '到时创建任务时的提醒修订快照；应用层校验>=1，发送前须等于当前reminder.revision且提醒为FIRED；旧修订任务取消后不恢复',
-    recipient_id BIGINT NOT NULL COMMENT '邮件接收者；逻辑外键 app_user.id，由应用层校验关联及维护引用，必须与通知和提醒接收者相同，仅本人邮箱可作为收件地址',
+    notification_id BIGINT NOT NULL COMMENT '关联站内通知；逻辑外键 notification.id，由应用层校验关联及维护引用，须对应同一接收者与资源；有提醒来源时还须与提醒修订一致；同通知同渠道唯一',
+    source_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '任务来源；应用层校验BUSINESS=业务互动（提醒引用均为空）、REMINDER_DUE=私人到时提醒、REMINDER_CHECK=改期检查提示（这两种提醒引用均必填）；客户端不可指定',
+    reminder_id BIGINT NULL COMMENT '来源提醒；逻辑外键 reminder.id，由应用层校验关联及维护引用；BUSINESS时为空，REMINDER_DUE/REMINDER_CHECK时必填且属于同一接收者，取消或资源失权时按来源清理未完成任务',
+    reminder_revision BIGINT NULL COMMENT '生成任务时的提醒修订快照；应用层校验BUSINESS时为空，REMINDER_DUE/REMINDER_CHECK时必填且>=1；发送前DUE须同修订FIRED，CHECK须同修订PENDING或FIRED且不改变提醒状态',
+    recipient_id BIGINT NOT NULL COMMENT '邮件接收者；逻辑外键 app_user.id，由应用层校验关联及维护引用，必须与关联通知及有提醒来源时的提醒接收者相同，仅本人邮箱可作为收件地址',
     channel VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'MAIL' COMMENT '投递渠道；应用层校验v1仅MAIL=邮件，站内通知独立落库，不在此队列投递',
-    to_address VARCHAR(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL COMMENT '到时入队的收件邮箱快照，最多320字；应用层校验仅邮箱缺失而直接FAILED时可空，QUEUED/PROCESSING必须为有效单个地址，发送前仍须匹配本人当前邮箱；地址变化取消任务，不转投新地址，缺失地址任务不能直接重排',
+    to_address VARCHAR(320) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL COMMENT '创建任务时的收件邮箱快照，最多320字；应用层校验仅自动到时或改期检查因邮箱缺失而直接FAILED时可空，QUEUED/PROCESSING必须为有效单个地址，发送前仍须匹配本人当前邮箱；地址变化取消任务，不转投新地址，缺失地址任务不能直接重排',
     status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'QUEUED' COMMENT '投递状态；应用层校验QUEUED=等待尝试、PROCESSING=处理中、SENT=SMTP服务器已接受（不代表送达或已读）、FAILED=失败、CANCELLED=失效或取消；后三者为自动终态，仅FAILED经维护鉴权可人工重试，SENT/CANCELLED不重开',
     attempt_count INT NOT NULL DEFAULT 0 COMMENT '领取尝试次数，含首次；应用层校验>=0，每次领取递增，默认最多5次由部署配置控制；临时失败退避重试，永久失败或次数耗尽置FAILED，人工重试经再次鉴权后重置为0',
     next_attempt_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT 'UTC下次尝试时间；应用层使用数据库UTC时钟设置与判断，QUEUED且到期才可领取；临时失败默认按1、5、15、60分钟退避，可配置，重试不重新生成站内通知',

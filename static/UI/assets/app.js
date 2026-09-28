@@ -76,7 +76,7 @@
         {id:'c4',owner:'partner',title:'整理上次旅行的路线',body:'周末一起看看还想去哪儿。',nextAction:'',due:addDay(day,3),status:'OPEN',shared:true,reminder:'',result:'',connectionId:'connection-demo-1'}
       ],
       notifications:[{id:'n1',kind:'expression',resourceId:'x1',message:'收到一条新的表达',read:false,at:stamp(day,'09:20')},{id:'n2',kind:'invitation',resourceId:'i1',message:'收到一份新邀约',read:false,at:stamp(day,'09:00')},{id:'n3',kind:'memory',resourceId:'m4',message:'你设置的私人提醒到了',read:true,at:stamp(addDay(day,-1),'16:00')}],
-      inviteToken:null,connectionInvites:[],drafts:{},signedIn:true
+      connectionInvites:[],drafts:{},signedIn:true
     };
   }
   let storageAvailable = true;
@@ -86,7 +86,8 @@
   state.user.username ||= 'linan';state.partner.username ||= state.user.username==='linan'?'chenyu':'linan';state.partner.timezone ||= 'Asia/Shanghai';
   [state.user,state.partner].forEach(person=>{person.avatarStyle ||= {'✿':'FLOWER','☼':'SUN','芽':'SPROUT'}[person.avatar]||'INITIAL';delete person.avatar;});
   state.availability.forEach(a=>a.owner ||= 'partner');state.notifications.forEach(n=>n.recipient ||= state.user.username);
-  state.connectionInvites ||= [];if(state.inviteToken){state.inviteToken.owner ||= state.user.username;if(!state.connectionInvites.some(t=>t.code===state.inviteToken.code))state.connectionInvites.push(state.inviteToken);state.inviteToken=null;}
+  state.connectionInvites ||= [];delete state.inviteToken;delete state.acceptedDemoInvite;
+  state.connectionInvites.forEach(invite=>{if(invite.code||!invite.codeHash){delete invite.code;invite.status='REVOKED';}invite.version ||= 1;});
   function save() {try {localStorage.setItem(KEY, JSON.stringify(state));} catch (_) {storageAvailable = false;}}
   save();
   const U = window.U = {
@@ -137,7 +138,6 @@
     const old=state.user.username;const flip=who=>who==='me'?'partner':who==='partner'?'me':who;
     state.events.filter(e=>e.kind==='SHARED').forEach(e=>{e.privateReminders ||= {};e.privateReminders[old]=e.reminder||'';e.reminder=e.privateReminders[username]||'';e.firedReminders ||= {};e.firedReminders[old]=e.firedReminder||'';e.firedReminder=e.firedReminders[username]||'';});
     state.memories.forEach(m=>{m.owner=flip(m.owner);m.comments.forEach(c=>c.author=flip(c.author));});state.commitments.forEach(c=>c.owner=flip(c.owner));state.events.forEach(e=>{if(e.owner)e.owner=flip(e.owner);});state.expressions.forEach(x=>{x.sender=flip(x.sender);x.replies.forEach(r=>r.author=flip(r.author));});state.invitations.forEach(i=>i.sender=flip(i.sender));state.availability.forEach(a=>a.owner=flip(a.owner));
-    if(state.inviteToken&&!state.inviteToken.owner)state.inviteToken.owner=old;
     state.draftsByUser ||= {};state.draftsByUser[old]=state.drafts;state.drafts=state.draftsByUser[username]||{};
     [state.user,state.partner]=[state.partner,state.user];U.view={};save();
   };
@@ -215,10 +215,17 @@
     form.addEventListener('submit',event=>{
       event.preventDefault();const values=serialize();const message=form.querySelector('.form-message');message.textContent='';
       Object.keys(values).forEach(key=>{if(typeof values[key]==='string')values[key]=values[key].trim();});
+      const finish=result=>{
+        if(!form.isConnected)return;
+        if(typeof result==='string'){message.textContent=result;message.scrollIntoView({block:'nearest'});return;}
+        if(result===false)return;
+        if(draft)delete state.drafts[draft];save();U.close();U.render();
+      };
       const result=onSubmit(values,form);
-      if(typeof result==='string'){message.textContent=result;message.scrollIntoView({block:'nearest'});return;}
-      if(result===false)return;
-      if(draft)delete state.drafts[draft];save();U.close();U.render();
+      if(result&&typeof result.then==='function'){
+        const button=form.querySelector('[type=submit]');button.disabled=true;
+        result.then(finish,()=>{if(form.isConnected)message.textContent='暂时无法校验，请再试一次。';}).finally(()=>{if(form.isConnected)button.disabled=false;});
+      }else finish(result);
     });
     return form;
   };

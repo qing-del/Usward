@@ -30,3 +30,50 @@ test('legacy glyphs migrate to canonical avatarStyle without storing an image',(
   assert.equal(Object.hasOwn(env.U.state.user,'avatar'),false);
   assert.match(env.U.avatar(),/>✿</);
 });
+
+test('invitation shows plaintext only when generated, then only metadata survives reload',async()=>{
+  let env=preview();env.U.replaceState({...env.U.state,connected:false,connectionId:null});
+  await env.U.actions['connection-generate']();
+  const code=env.modal.html.match(/id="connection-code" value="([^"]+)"/)[1];
+  assert.match(code,/^US-[A-Z2-9]{8}-[A-Z2-9]{8}$/);
+  let saved=env.saved();
+  assert.ok(!saved.includes(code));
+  assert.ok(!saved.includes('"code":'));
+  assert.equal(env.U.state.connectionInvites[0].status,'PENDING');
+  assert.equal(env.U.state.connectionInvites[0].codeHash.length,64);
+  env=preview(saved);
+  await env.U.actions['connection-generate']();
+  assert.match(env.modal.html,/邀请编号/);
+  assert.doesNotMatch(env.modal.html,/id="connection-code"/);
+  await env.U.actions['connection-regenerate']();
+  const replacement=env.modal.html.match(/id="connection-code" value="([^"]+)"/)[1];
+  assert.notEqual(replacement,code);
+  assert.equal(env.U.state.connectionInvites[0].status,'REVOKED');
+  assert.equal(env.U.state.connectionInvites[1].status,'PENDING');
+  env.U.actions['connection-revoke']();
+  assert.equal(env.U.state.connectionInvites[1].status,'REVOKED');
+});
+
+test('invite preview rejects self, revoked, expired and consumed tokens before connecting',async()=>{
+  const env=preview();env.U.replaceState({...env.U.state,connected:false,connectionId:null});
+  await env.U.actions['connection-generate']();
+  const code=env.modal.html.match(/id="connection-code" value="([^"]+)"/)[1];
+  env.U.actions['connection-receive']();
+  assert.match(await env.submit({code}),/不能接受自己/);
+  env.U.switchAccount('chenyu');
+  env.U.actions['connection-receive']();
+  assert.equal(await env.submit({code}),false);
+  assert.match(env.modal.html,/林安/);
+  env.U.actions['connection-accept']();
+  assert.equal(env.U.connected(),true);
+  assert.equal(env.U.state.connectionInvites[0].status,'CONSUMED');
+  env.U.actions['connection-end-confirm']();env.confirm();
+  env.U.actions['connection-receive']();
+  assert.match(await env.submit({code}),/已经使用/);
+  await env.U.actions['connection-generate']();
+  const later=env.modal.html.match(/id="connection-code" value="([^"]+)"/)[1];
+  env.U.switchAccount('linan');
+  env.advance(25*60*60*1000);
+  env.U.actions['connection-receive']();
+  assert.match(await env.submit({code:later}),/已过期/);
+});

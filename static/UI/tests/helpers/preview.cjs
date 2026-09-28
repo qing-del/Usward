@@ -14,7 +14,7 @@ function preview(saved) {
     querySelectorAll: () => []
   };
   const context = vm.createContext({
-    Date:Clock, Intl, URLSearchParams, console, crypto:require('node:crypto').webcrypto,
+    Date:Clock, Intl, URLSearchParams, TextEncoder, console, crypto:require('node:crypto').webcrypto,
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     document:{body:{dataset:{page:'today'}},hidden:false,addEventListener(){},querySelector:selector=>selector==='#dialog-form'?timeForm:null},
     location:{hash:'',search:'',replace(){}},matchMedia:()=>({matches:false}),setInterval(){},setTimeout(){},addEventListener(){}
@@ -36,9 +36,9 @@ function preview(saved) {
     env.form={title,html,submit,options,node:timeForm};return timeForm;
   };
   env.submit = values => {
+    const finish=result=>{if(typeof result!=='string'&&result!==false){U.save();U.render();}return result;};
     const result=env.form.submit(values,timeForm);
-    if(typeof result!=='string' && result!==false){U.save();U.render();}
-    return result;
+    return result&&typeof result.then==='function'?result.then(finish):finish(result);
   };
   return env;
 }

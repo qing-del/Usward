@@ -193,6 +193,6 @@
     s.notificationSettings=s.notificationSettings.filter(setting=>settingScope(setting.resourceType,setting.resourceId));
   };
   const render=U.render;
-  U.render=()=>{U.prepareNotifications();render();};
+  U.render=()=>{U.prepareReminders();U.prepareNotifications();render();};
   U.prepareNotifications();U.save();
 })();

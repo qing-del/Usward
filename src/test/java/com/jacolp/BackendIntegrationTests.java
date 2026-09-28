@@ -93,6 +93,152 @@ class BackendIntegrationTests {
         assertEquals(200, new Browser().login("alice", "A-new-test-password-21").statusCode());
     }
 
+    @Test
+    void privateCardsNeverLeakAcrossAccounts() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+
+        JsonNode created = JSON.readTree(alice.write("POST", "/memories", """
+                {"body":"Alice's private memory","title":"Private","category":"INTEREST",
+                 "tags":["hidden","personal"],"sourceType":"OBSERVED","sourceDate":"2026-09-27"}
+                """).body());
+        String id = created.path("id").asText();
+        assertTrue(created.path("id").isTextual());
+        assertTrue(created.path("version").isTextual());
+        assertTrue(created.path("ownerId").isTextual());
+        assertEquals("OBSERVED", created.path("sourceType").asText());
+        assertEquals(200, alice.call("GET", "/memories/" + id, null, null).statusCode());
+
+        assertEquals(404, bob.call("GET", "/memories/" + id, null, null).statusCode());
+        JsonNode bobList = JSON.readTree(bob.call("GET", "/memories?keyword=Alice", null, null).body());
+        assertEquals(0, bobList.path("total").asInt());
+        assertEquals(0, bobList.path("availableTags").size());
+        assertEquals(404, bob.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"0\",\"body\":\"stolen\"}").statusCode());
+        assertEquals(404, bob.write("POST", "/memories/" + id + "/archive",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(404, bob.write("DELETE", "/memories/" + id,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals("Alice's private memory",
+                JSON.readTree(alice.call("GET", "/memories/" + id, null, null).body())
+                        .path("body").asText());
+
+        assertEquals(400, alice.write("POST", "/memories",
+                "{\"body\":\"x\",\"ownerId\":\"2\"}").statusCode());
+        assertEquals(400, alice.write("POST", "/memories",
+                "{\"body\":\"  \",\"sourceType\":\"EXPLICIT\"}").statusCode());
+        assertEquals(400, alice.write("POST", "/memories",
+                "{\"body\":\"x\",\"sourceType\":\"made-up\"}").statusCode());
+    }
+
+    @Test
+    void paginationSearchAndTagCountsUseTheFullAuthorizedSet() throws Exception {
+        Browser alice = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        for (int i = 0; i < 23; i++) {
+            String body = "{\"body\":\"entry " + i + "\",\"title\":\"Page " + i
+                    + "\",\"category\":\"" + (i % 2 == 0 ? "INTEREST" : "BOUNDARY")
+                    + "\",\"tags\":[\"all\",\"" + (i % 2 == 0 ? "even" : "odd") + "\"]}";
+            assertEquals(201, alice.write("POST", "/memories", body).statusCode());
+        }
+        JsonNode first = JSON.readTree(alice.call("GET", "/memories", null, null).body());
+        assertEquals(23, first.path("total").asInt());
+        assertEquals(20, first.path("items").size());
+        assertTrue(first.path("hasMore").asBoolean());
+        assertEquals(23, countTag(first, "all"));
+        assertEquals(12, countTag(first, "even"));
+        assertEquals(11, countTag(first, "odd"));
+        assertFalse(first.path("items").get(0).has("body"));
+        assertTrue(first.path("items").get(0).path("id").isTextual());
+
+        JsonNode second = JSON.readTree(alice.call("GET", "/memories?page=2", null, null).body());
+        assertEquals(3, second.path("items").size());
+        assertEquals(23, second.path("total").asInt());
+        assertFalse(second.path("hasMore").asBoolean());
+
+        JsonNode even = JSON.readTree(alice.call("GET", "/memories?tag=even&size=9", null, null).body());
+        assertEquals(12, even.path("total").asInt());
+        assertEquals(9, even.path("items").size());
+        assertTrue(even.path("hasMore").asBoolean());
+        assertEquals(23, countTag(even, "all"));
+        assertEquals(11, countTag(even, "odd"));
+
+        JsonNode search = JSON.readTree(alice.call("GET", "/memories?keyword=entry%2021", null, null).body());
+        assertEquals(1, search.path("total").asInt());
+        assertEquals("Page 21", search.path("items").get(0).path("title").asText());
+        assertEquals(1, countTag(search, "odd"));
+        JsonNode category = JSON.readTree(alice.call("GET", "/memories?category=INTEREST", null, null).body());
+        assertEquals(12, category.path("total").asInt());
+        assertEquals(12, countTag(category, "all"));
+        assertEquals(0, countTag(category, "odd"));
+        assertEquals(0, JSON.readTree(alice.call("GET", "/memories?keyword=%25", null, null)
+                .body()).path("total").asInt());
+        assertEquals(400, alice.call("GET", "/memories?size=101", null, null).statusCode());
+        assertEquals(400, alice.call("GET", "/memories?archived=true", null, null).statusCode());
+        assertEquals(0, JSON.readTree(alice.call("GET", "/memories?scope=PARTNER", null, null)
+                .body()).path("total").asInt());
+    }
+
+    @Test
+    void archiveRestoreDeleteAndVersionsFollowContract() throws Exception {
+        Browser alice = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        JsonNode created = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"original\",\"tags\":[\"old\"]}").body());
+        String id = created.path("id").asText();
+        assertEquals("INTERPRETATION", created.path("sourceType").asText());
+        assertEquals("0", created.path("version").asText());
+        JsonNode edited = JSON.readTree(alice.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"0\",\"body\":\"edited\",\"tags\":[\"new\"]}").body());
+        assertEquals("1", edited.path("version").asText());
+        assertEquals("edited", edited.path("body").asText());
+        assertEquals("new", edited.path("tags").get(0).asText());
+        assertEquals(409, alice.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"0\",\"body\":\"stale\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"1\",\"archived\":true}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":1,\"body\":\"invalid version type\"}").statusCode());
+
+        JsonNode archived = JSON.readTree(alice.write("POST", "/memories/" + id + "/archive",
+                "{\"expectedVersion\":\"1\"}").body());
+        assertEquals("2", archived.path("version").asText());
+        assertTrue(archived.path("archived").asBoolean());
+        assertEquals(0, JSON.readTree(alice.call("GET", "/memories", null, null).body())
+                .path("total").asInt());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/memories?scope=MINE&archived=true", null, null)
+                .body()).path("total").asInt());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/me", null, null).body())
+                .path("stats").path("archivedMemoryCount").asInt());
+        assertEquals(409, alice.write("POST", "/memories/" + id + "/restore",
+                "{\"expectedVersion\":\"1\"}").statusCode());
+
+        JsonNode restored = JSON.readTree(alice.write("POST", "/memories/" + id + "/restore",
+                "{\"expectedVersion\":\"2\"}").body());
+        assertEquals("3", restored.path("version").asText());
+        assertFalse(restored.path("archived").asBoolean());
+        assertEquals(409, alice.write("DELETE", "/memories/" + id,
+                "{\"expectedVersion\":\"2\"}").statusCode());
+        assertEquals(204, alice.write("DELETE", "/memories/" + id,
+                "{\"expectedVersion\":\"3\"}").statusCode());
+        assertEquals(404, alice.call("GET", "/memories/" + id, null, null).statusCode());
+        assertEquals(0, JSON.readTree(alice.call("GET", "/memories", null, null).body())
+                .path("total").asInt());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_tag WHERE card_id = ?",
+                Long.class, Long.parseLong(id)));
+    }
+
+    private long countTag(JsonNode list, String tag) {
+        for (JsonNode row : list.path("availableTags")) {
+            if (tag.equals(row.path("tag").asText())) {
+                return row.path("count").asLong();
+            }
+        }
+        return 0;
+    }
+
     private long orphanSessionAttributes() {
         return jdbc.queryForObject("""
                 SELECT COUNT(*) FROM SPRING_SESSION_ATTRIBUTES AS a
@@ -118,6 +264,10 @@ class BackendIntegrationTests {
 
         HttpResponse<String> login(String username, String password) throws Exception {
             return call("POST", "/auth/login", credentials(username, password), csrf());
+        }
+
+        HttpResponse<String> write(String method, String path, String body) throws Exception {
+            return call(method, path, body, csrf());
         }
 
         HttpResponse<String> call(String method, String path, String body, JsonNode csrf) throws Exception {

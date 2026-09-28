@@ -6,7 +6,7 @@
 
 定位：支持单人先用、双人连接的私密关系辅助网站。
 
-本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；SQL 待同步项见 §10.1，后端及真实 SMTP 仍待实现。
+本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；初始化 SQL 已同步并纳入新库 Flyway V1，后端其余模块及真实 SMTP 仍待实现。
 
 ## 1. 目标与范围
 
@@ -353,7 +353,7 @@ app:
 
 ### 10.1 数据库同步要求
 
-本轮只修订设计。现有 `static/database/initDatabase.sql` 尚需通过后续初始化脚本更新和 Flyway 迁移同步：
+`static/database/initDatabase.sql` 已包含下列目标字段与表，新库由 Flyway V1 创建。下列清单仍记录了相对早期模型的差异；已有数据库的升级迁移不属于当前新库实施范围：
 
 - `app_user` 新增 `avatar_style`，默认 `INITIAL`，既有用户按默认值回填。
 - `commitment` 新增 `due_kind`、`due_date`、`due_timezone`；旧 `due_at` 非空回填 `INSTANT`，为空回填 `NONE`。日期截止保持独立字段，校验互斥组合，并补日期截止查询索引。

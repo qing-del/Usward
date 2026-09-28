@@ -1,3 +1,32 @@
 spring:
   application:
     name: Usward
+  datasource:
+    url: ${USWARD_DB_URL}
+    username: ${USWARD_DB_USER}
+    password: ${USWARD_DB_PASSWORD}
+    hikari:
+      connection-init-sql: SET time_zone = '+00:00'
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+  sql:
+    init:
+      mode: never
+  session:
+    jdbc:
+      initialize-schema: never
+  jackson:
+    time-zone: UTC
+
+server:
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        same-site: lax
+        secure: ${USWARD_COOKIE_SECURE:false}
+
+mybatis:
+  configuration:
+    map-underscore-to-camel-case: true

@@ -5,4 +5,8 @@
 .my-notification-setting{display:flex;flex-direction:column;gap:8px;padding:14px 0;border-top:1px solid var(--line);font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .my-notification-setting .text-link{align-self:flex-start}
 .notification-override{background:var(--peach)}
+.list-pagination{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:20px;flex-wrap:wrap}
+.invitation-list-filters{margin:20px 0}
+.time-offset{margin-top:10px}
+.time-offset:empty{display:none}
 @media(max-width:600px){.notification-fields{padding:14px}}

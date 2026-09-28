@@ -14,14 +14,14 @@ function preview(saved) {
     querySelectorAll: () => []
   };
   const context = vm.createContext({
-    Date:Clock, Intl, console, crypto:require('node:crypto').webcrypto,
+    Date:Clock, Intl, URLSearchParams, console, crypto:require('node:crypto').webcrypto,
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     document:{body:{dataset:{page:'today'}},hidden:false,addEventListener(){},querySelector:selector=>selector==='#dialog-form'?timeForm:null},
     location:{hash:'',replace(){}},setInterval(){},setTimeout(){},addEventListener(){}
   });
   context.window = context;
   const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname,'../../assets',file),'utf8'),context,{filename:file});
-  load('app.js');load('time.js');load('reminders.js');load('notifications.js');load('today.js');load('me.js');load('commitments.js');
+  load('app.js');load('time.js');load('reminders.js');load('notifications.js');load('lists.js');load('today.js');load('me.js');load('commitments.js');
   const U = context.U;
   const env = {U,load,advance:ms=>{now+=ms;},saved:()=>{U.save();return storage.get('usward-preview-v1');}};
   U.close = () => {};

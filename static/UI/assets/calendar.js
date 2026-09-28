@@ -46,7 +46,17 @@
     const outside=(e,day)=>e.allDay||U.day(e.start)!==day||U.day(e.end)!==day||U.time(e.start)<'08:00'||U.time(e.end)>'23:00';
     const dayItems=day=>items(day);
     const extra=days.some(day=>dayItems(day).some(e=>outside(e,day)));
-    return `<div class="week-calendar"><div class="week-header"><span class="week-time-label">时间</span>${days.map(day=>`<button class="week-day-heading ${day===U.currentDay()?'is-today':''}" data-action="calendar-day" data-value="${day}"><span>${U.date(day,{weekday:'short'})}</span><strong>${Number(day.slice(-2))}</strong></button>`).join('')}</div>${extra?`<div class="week-extra-row"><span class="week-time-label">全天 /<br>其他时间</span>${days.map(day=>`<div class="week-extra-cell">${dayItems(day).filter(e=>outside(e,day)).map(e=>eventChip(e,true)).join('')}</div>`).join('')}</div>`:''}<div class="week-body"><div class="week-times">${Array.from({length:8},(_,n)=>`<span style="top:${n*64}px">${String(8+n*2).padStart(2,'0')}:00</span>`).join('')}</div>${days.map(day=>`<div class="week-column">${dayItems(day).filter(e=>!outside(e,day)).map(e=>{const start=Number(U.time(e.start).slice(0,2))+Number(U.time(e.start).slice(-2))/60;const end=Number(U.time(e.end).slice(0,2))+Number(U.time(e.end).slice(-2))/60;return `<div class="week-event-position" style="top:${(start-8)*32}px;height:${Math.max(37,(end-start)*32)}px">${eventChip(e,true)}</div>`;}).join('')}</div>`).join('')}</div></div>`;
+    const positioned=day=>{
+      const timed=dayItems(day).filter(e=>!outside(e,day)).sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)||Date.parse(a.end)-Date.parse(b.end));
+      const groups=[];let group=[],edge=-Infinity;
+      timed.forEach(e=>{const start=Date.parse(e.start);if(group.length&&start>=edge){groups.push(group);group=[];edge=-Infinity;}group.push(e);edge=Math.max(edge,Date.parse(e.end));});
+      if(group.length)groups.push(group);
+      return groups.flatMap(entries=>{
+        const laneEnds=[],placed=entries.map(e=>{const start=Date.parse(e.start);let lane=laneEnds.findIndex(end=>end<=start);if(lane<0)lane=laneEnds.length;laneEnds[lane]=Date.parse(e.end);return {e,lane};});
+        return placed.map(({e,lane})=>({e,lane,count:laneEnds.length}));
+      });
+    };
+    return `<div class="week-calendar"><div class="week-header"><span class="week-time-label">时间</span>${days.map(day=>`<button class="week-day-heading ${day===U.currentDay()?'is-today':''}" data-action="calendar-day" data-value="${day}"><span>${U.date(day,{weekday:'short'})}</span><strong>${Number(day.slice(-2))}</strong></button>`).join('')}</div>${extra?`<div class="week-extra-row"><span class="week-time-label">全天 /<br>其他时间</span>${days.map(day=>`<div class="week-extra-cell">${dayItems(day).filter(e=>outside(e,day)).map(e=>eventChip(e,true)).join('')}</div>`).join('')}</div>`:''}<div class="week-body"><div class="week-times">${Array.from({length:8},(_,n)=>`<span style="top:${n*64}px">${String(8+n*2).padStart(2,'0')}:00</span>`).join('')}</div>${days.map(day=>`<div class="week-column">${positioned(day).map(({e,lane,count})=>{const start=Number(U.time(e.start).slice(0,2))+Number(U.time(e.start).slice(-2))/60;const end=Number(U.time(e.end).slice(0,2))+Number(U.time(e.end).slice(-2))/60;return `<div class="week-event-position" style="top:${(start-8)*32}px;height:${Math.max(37,(end-start)*32)}px;left:${lane*100/count}%;width:${100/count}%">${eventChip(e,true)}</div>`;}).join('')}</div>`).join('')}</div></div>`;
   }
   U.pages.calendar=()=>{
     const s=U.state;

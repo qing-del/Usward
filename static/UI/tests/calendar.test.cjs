@@ -49,3 +49,15 @@ test('busy blocks are clipped and merge only where all contributors explicitly s
   const invite=U.find('invitations','i1');invite.start=t('11:00');invite.end=t('12:00');
   assert.ok(U.conflicts(invite).length>0);
 });
+
+test('overlapping week events remain separately visible in adjacent lanes',()=>{
+  const env=preview(),{U}=env;env.load('calendar.js');const day=U.addDay(U.currentDay(),1),at=time=>U.fromLocal(day+'T'+time);
+  U.state.events.push(
+    {id:'overlap-a',kind:'PERSONAL',owner:'me',status:'CONFIRMED',title:'先开始的安排',start:at('10:00'),end:at('11:30')},
+    {id:'overlap-b',kind:'PERSONAL',owner:'me',status:'CONFIRMED',title:'中途开始的安排',start:at('10:30'),end:at('11:00')}
+  );
+  U.view.calendar={mode:'week',scope:'all',day,includeCancelled:false};
+  const html=U.pages.calendar();
+  assert.match(html,/left:0%;width:50%[^>]*>.*?data-id="overlap-a"/s);
+  assert.match(html,/left:50%;width:50%[^>]*>.*?data-id="overlap-b"/s);
+});

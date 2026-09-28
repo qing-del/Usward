@@ -17,7 +17,7 @@ function preview(saved) {
     Date:Clock, Intl, URLSearchParams, console, crypto:require('node:crypto').webcrypto,
     localStorage:{getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)},
     document:{body:{dataset:{page:'today'}},hidden:false,addEventListener(){},querySelector:selector=>selector==='#dialog-form'?timeForm:null},
-    location:{hash:'',replace(){}},setInterval(){},setTimeout(){},addEventListener(){}
+    location:{hash:'',search:'',replace(){}},matchMedia:()=>({matches:false}),setInterval(){},setTimeout(){},addEventListener(){}
   });
   context.window = context;
   const load = file => vm.runInContext(fs.readFileSync(path.join(__dirname,'../../assets',file),'utf8'),context,{filename:file});

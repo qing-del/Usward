@@ -9,4 +9,6 @@
 .invitation-list-filters{margin:20px 0}
 .time-offset{margin-top:10px}
 .time-offset:empty{display:none}
+.calendar-query-controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:14px}
+.calendar-board.range-board{max-height:720px;overflow-y:auto}
 @media(max-width:600px){.notification-fields{padding:14px}}

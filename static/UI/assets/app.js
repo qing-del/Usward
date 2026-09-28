@@ -46,7 +46,7 @@
     const day = seedDay;
     return {
       schema:1, demoDay:day, connected, connectionId:connected ? 'connection-demo-1' : null,
-      user:{username:'linan',name:'林安',timezone:'Asia/Shanghai',avatar:'安',shareAvailability:false},partner:{username:'chenyu',name:'陈屿',timezone:'Asia/Shanghai',avatar:'屿',shareAvailability:true},
+      user:{username:'linan',name:'林安',timezone:'Asia/Shanghai',avatarStyle:'INITIAL',shareAvailability:false},partner:{username:'chenyu',name:'陈屿',timezone:'Asia/Shanghai',avatarStyle:'INITIAL',shareAvailability:true},
       memories:[
         {id:'m1',owner:'me',title:'不赶时间的早餐',body:'比起精心安排的约会，更喜欢一起慢慢吃一顿早餐。哪怕只是楼下的豆浆和包子，也会觉得这一天很好。',category:'喜好兴趣',tags:['早餐','小日常'],source:'EXPLICIT',sourceDate:addDay(day,-3),nextAction:'下次周末，留一点时间一起吃早餐。',reminder:'',shared:false,connectionId:null,archived:false,color:'sand',comments:[]},
         {id:'m2',owner:'me',title:'忙的时候，先发一条消息',body:'他说，忙的时候不需要一直聊天，但如果能提前说一句“今天会比较忙”，就不用互相猜测。',category:'相处偏好',tags:['沟通','安心感'],source:'EXPLICIT',sourceDate:addDay(day,-5),nextAction:'忙之前，记得主动告诉他。',reminder:'',shared:true,connectionId:'connection-demo-1',archived:false,color:'sage',comments:[]},
@@ -84,6 +84,7 @@
   try {state = JSON.parse(localStorage.getItem(KEY));} catch (_) {storageAvailable = false;}
   if (!state || state.schema !== 1) state = seed();
   state.user.username ||= 'linan';state.partner.username ||= state.user.username==='linan'?'chenyu':'linan';state.partner.timezone ||= 'Asia/Shanghai';
+  [state.user,state.partner].forEach(person=>{person.avatarStyle ||= {'✿':'FLOWER','☼':'SUN','芽':'SPROUT'}[person.avatar]||'INITIAL';delete person.avatar;});
   state.availability.forEach(a=>a.owner ||= 'partner');state.notifications.forEach(n=>n.recipient ||= state.user.username);
   state.connectionInvites ||= [];if(state.inviteToken){state.inviteToken.owner ||= state.user.username;if(!state.connectionInvites.some(t=>t.code===state.inviteToken.code))state.connectionInvites.push(state.inviteToken);state.inviteToken=null;}
   function save() {try {localStorage.setItem(KEY, JSON.stringify(state));} catch (_) {storageAvailable = false;}}
@@ -103,7 +104,7 @@
     eventVisible:e => !e.deleted && (e.kind === 'PERSONAL' ? e.owner === 'me' : U.shared(e)),
     expressionVisible:x => U.shared(x),
     person:who => who === 'me' ? state.user.name : state.partner.name,
-    avatar:(who='me',cls='') => `<span class="avatar ${who === 'partner' ? 'partner' : ''} ${cls}" aria-label="${esc(U.person(who))}">${esc((who === 'me' ? state.user.avatar : state.partner.avatar) || U.person(who).slice(-1))}</span>`,
+    avatar:(who='me',cls='') => {const person=who==='me'?state.user:state.partner,style=person.avatarStyle||'INITIAL';return `<span class="avatar ${who==='partner'?'partner':''} style-${style.toLowerCase()} ${cls}" aria-label="${esc(person.name)}的头像">${esc({FLOWER:'✿',SUN:'☼',SPROUT:'芽'}[style]||person.name.slice(-1))}</span>`;},
     badge:(text,color='gray',symbol='') => `<span class="badge ${color}">${symbol ? icon(symbol,11) : ''}${esc(text)}</span>`,
     empty:(title,copy,action='',label='') => `<div class="empty-state"><div class="icon-box">${icon('leaf',25)}</div><h3>${esc(title)}</h3><p>${esc(copy)}</p>${action ? `<button class="btn soft" data-action="${action}">${icon('plus',15)}${esc(label)}</button>` : ''}</div>`,
     heading:(eyebrow,title,subtitle,button='') => `<div class="page-heading"><div><p class="eyebrow">${esc(eyebrow)}</p><h1>${esc(title)}</h1><p class="subtitle">${esc(subtitle)}</p></div>${button}</div>`,

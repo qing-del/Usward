@@ -23,3 +23,4 @@
 @media(max-width:600px){.reminder-fields{padding:14px}.email-value{max-width:115px}.mail-delivery-link{margin-left:0;max-width:100%}.mail-message-preview{padding:17px}}
 
 .reminder-list-item strong{display:block;overflow-wrap:anywhere}.reminder-list-item .flex{flex-wrap:wrap;gap:9px}.notification-text{min-width:0;overflow-wrap:anywhere}.notification-row>svg,.notification-row>.icon-box{flex-shrink:0}
+.reminder-results>div{padding:12px 0;border-bottom:1px solid var(--line)}.reminder-results>div:last-child{border-bottom:0}.reminder-results .reminder-list-item{padding:9px 0 0;border:0}

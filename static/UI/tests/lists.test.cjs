@@ -80,3 +80,22 @@ test('notification read boundary is actor bound, expires and preserves first rea
   const token=U.makeReadBoundary();U.switchAccount('chenyu');assert.equal(U.readAllNotifications(token).ok,false);
   U.switchAccount('linan');env.advance(120001);assert.equal(U.readAllNotifications(token).ok,false);
 });
+
+test('private reminder list filters the full authorised scope and paginates after filtering',()=>{
+  const env=preview(),{U}=env;
+  for(let k=0;k<25;k++)U.state.reminders.push({id:'list-r'+k,resourceType:'MEMORY_CARD',resourceId:'m1',recipient:U.state.user.username,scheduledAt:new Date(Date.parse('2026-10-01T00:00:00Z')+k*60000).toISOString(),deliveryMode:'IN_APP',revision:1,status:'PENDING'});
+  U.state.reminders.push({id:'cancelled-r',resourceType:'CALENDAR_EVENT',resourceId:'e1',recipient:U.state.user.username,scheduledAt:'2026-10-02T00:00:00Z',deliveryMode:'IN_APP',revision:2,status:'CANCELLED'});
+  U.state.reminders.push({id:'hidden-r',resourceType:'MEMORY_CARD',resourceId:'m1',recipient:U.state.partner.username,scheduledAt:'2026-10-02T00:00:00Z',deliveryMode:'IN_APP',revision:1,status:'PENDING'});
+  U.refreshReminders();const filtered=U.reminderQuery({resourceType:'MEMORY_CARD',status:'PENDING'});
+  assert.equal(filtered.length,25);
+  assert.equal(filtered[0].id,'list-r0');
+  U.view.reminders={resourceType:'MEMORY_CARD',status:'PENDING',page:1};U.actions['reminders-list']();
+  assert.match(env.modal.html,/共 25 条 · 第 1 \/ 2 页/);
+  assert.equal((env.modal.html.match(/class="reminder-list-item"/g)||[]).length,20);
+  U.actions['list-page']({list:'reminders',value:'2'});
+  assert.match(env.modal.html,/第 2 \/ 2 页/);
+  assert.equal((env.modal.html.match(/class="reminder-list-item"/g)||[]).length,5);
+  U.view.reminders.resourceType='CALENDAR_EVENT';U.view.reminders.status='CANCELLED';U.view.reminders.page=1;U.actions['reminders-list']();
+  assert.match(env.modal.html,/共 1 条/);
+  assert.match(env.modal.html,/已取消/);
+});

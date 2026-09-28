@@ -165,11 +165,15 @@
     const r=U.state.reminders.find(r=>r.id===id&&r.recipient===U.state.user.username);
     if(r)U.reminderForm(r.resourceType,r.resourceId);
   };
+  U.reminderQuery=({resourceType='ALL',status='PENDING'}={})=>U.state.reminders
+    .filter(r=>r.recipient===U.state.user.username&&visibleTo(r))
+    .filter(r=>(resourceType==='ALL'||r.resourceType===resourceType)&&(status==='ALL'||r.status===status))
+    .sort(bySchedule);
   U.actions['reminders-list'] = () => {
-    const own=U.state.reminders.filter(r=>r.recipient===U.state.user.username&&visibleTo(r)).sort(bySchedule);
-    const pending=own.filter(r=>r.status==='PENDING'&&!closed(r));
-    const history=own.filter(r=>r.status!=='PENDING');
-    U.modal('我的私人提醒',`<p class="quiet-note">只显示自己的设置；共享内容上的提醒也由双方各自管理。</p><h3 class="mt-24">待触发 · ${pending.length} 条</h3>${pending.length?pending.map(r=>U.reminderItemHTML(r,true)).join(''):'<p class="quiet-note mt-16">没有待触发的计划。可以从记忆、日历或自己的承诺设置提醒。</p>'}${history.length?`<details class="optional-details mt-24"><summary>已触发 / 已取消 · ${history.length} 条</summary>${history.map(r=>`<p class="quiet-note mt-16">${r.status==='FIRED'?'已触发':'已取消'}</p>${U.reminderItemHTML(r,true)}`).join('')}</details>`:''}<p class="quiet-note mt-24">取消提醒会停止未完成的邮件任务，已经生成的站内通知仍保留。再次分享或重新打开内容不会恢复旧计划。</p>`,{eyebrow:'ONLY FOR ME'});
+    U.refreshReminders();U.view.reminders||={resourceType:'ALL',status:'PENDING',page:1};const v=U.view.reminders;
+    const all=U.reminderQuery(v),pager=U.pager('reminders',all.length),items=all.slice((v.page-1)*20,v.page*20);
+    U.modal('我的私人提醒',`<p class="quiet-note">只显示自己的设置；共享内容上的提醒也由双方各自管理。</p><div class="form-grid mt-16">${U.select('reminderType','内容类型',[['ALL','全部内容'],['MEMORY_CARD','记忆卡片'],['CALENDAR_EVENT','日历安排'],['COMMITMENT','我的承诺']],v.resourceType)}${U.select('reminderStatus','提醒状态',[['ALL','全部状态'],['PENDING','待触发'],['FIRED','已触发'],['CANCELLED','已取消']],v.status)}</div><div class="reminder-results mt-16">${items.length?items.map(r=>`<div>${U.badge({PENDING:'待触发',FIRED:'已触发',CANCELLED:'已取消'}[r.status],'gray')}${U.reminderItemHTML(r,true)}</div>`).join(''):U.empty('没有符合筛选的提醒','可以换一种内容类型或状态查看。')}</div>${pager}<p class="quiet-note mt-24">取消提醒会停止未完成的邮件任务，已经生成的站内通知仍保留。再次分享或重新打开内容不会恢复旧计划。</p>`,{eyebrow:'ONLY FOR ME',wide:true});
+    [['reminderType','resourceType'],['reminderStatus','status']].forEach(([name,key])=>document.querySelector('.modal [name="'+name+'"]')?.addEventListener('change',event=>{v[key]=event.target.value;v.page=1;U.actions['reminders-list']();}));
   };
 
   U.refreshReminders = () => {

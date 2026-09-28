@@ -20,7 +20,7 @@
     const v=U.view[list];v.page||=1;v.totalPages=Math.max(1,Math.ceil(total/size));v.page=Math.min(v.page,v.totalPages);
     return `<div class="list-pagination"><span class="quiet-note">共 ${total} 条 · 第 ${v.page} / ${v.totalPages} 页</span><div class="flex gap-8"><button class="btn soft small" data-action="list-page" data-list="${list}" data-value="${v.page-1}" ${v.page===1?'disabled':''}>上一页</button><button class="btn soft small" data-action="list-page" data-list="${list}" data-value="${v.page+1}" ${v.page===v.totalPages?'disabled':''}>下一页</button></div></div>`;
   };
-  U.actions['list-page']=({list,value})=>{const v=U.view[list];if(!v)return;v.page=Math.max(1,Math.min(v.totalPages||1,Number(value)||1));if(list==='notifications')U.actions.notifications();else if(list==='invitations')U.actions['invitations-list']();else U.render();};
+  U.actions['list-page']=({list,value})=>{const v=U.view[list];if(!v)return;v.page=Math.max(1,Math.min(v.totalPages||1,Number(value)||1));if(list==='notifications')U.actions.notifications();else if(list==='invitations')U.actions['invitations-list']();else if(list==='reminders')U.actions['reminders-list']();else U.render();};
   U.invitationsData=v=>{
     U.expire();return U.state.invitations.filter(U.shared).filter(i=>(v.direction==='ALL'||i.sender===(v.direction==='RECEIVED'?'partner':'me'))&&(v.status==='ALL'||i.status===v.status)&&(v.purpose==='ALL'||i.purpose===v.purpose)).sort(U.createdDesc);
   };

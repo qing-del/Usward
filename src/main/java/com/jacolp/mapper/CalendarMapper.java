@@ -1,6 +1,9 @@
 package com.jacolp.mapper;
 
 import com.jacolp.entity.CalendarEvent;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.List;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
@@ -58,4 +61,28 @@ public interface CalendarMapper {
             """)
     int deleteOwned(@Param("id") long id, @Param("ownerId") long ownerId,
                     @Param("expectedVersion") long expectedVersion);
+
+    @Select("""
+            SELECT
+            """ + COLUMNS + """
+            FROM calendar_event
+            WHERE owner_id = #{ownerId} AND kind = 'PERSONAL' AND status = 'CONFIRMED'
+              AND starts_at IS NOT NULL AND starts_at < #{toUtc} AND ends_at > #{fromUtc}
+            """)
+    List<CalendarEvent> timedInRange(@Param("ownerId") long ownerId,
+                                     @Param("fromUtc") LocalDateTime fromUtc,
+                                     @Param("toUtc") LocalDateTime toUtc);
+
+    @Select("""
+            SELECT
+            """ + COLUMNS + """
+            FROM calendar_event
+            WHERE owner_id = #{ownerId} AND kind = 'PERSONAL' AND status = 'CONFIRMED'
+              AND start_date IS NOT NULL
+              AND start_date <= COALESCE(DATE_ADD(#{toUtcDate}, INTERVAL 2 DAY), '9999-12-31')
+              AND end_date_exclusive > DATE_SUB(#{fromUtcDate}, INTERVAL 2 DAY)
+            """)
+    List<CalendarEvent> allDayCandidates(@Param("ownerId") long ownerId,
+                                         @Param("fromUtcDate") LocalDate fromUtcDate,
+                                         @Param("toUtcDate") LocalDate toUtcDate);
 }

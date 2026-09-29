@@ -11,6 +11,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -330,6 +332,115 @@ class BackendIntegrationTests {
         assertFalse(switched.path("allDay").asBoolean());
         assertTrue(switched.path("startDate").isNull());
         assertEquals("Europe/London", switched.path("eventTimezone").asText());
+    }
+
+    @Test
+    void calendarRangeUsesHalfOpenBoundariesAndNeverListsAnotherUsersEvents() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        createTimed(alice, "ends at start", "2026-09-28T15:00:00Z", "2026-09-28T16:00:00Z");
+        String first = createTimed(alice, "starts at start", "2026-09-28T16:00:00Z",
+                "2026-09-28T17:00:00Z");
+        String last = createTimed(alice, "overlaps end", "2026-09-29T15:00:00Z",
+                "2026-09-29T17:00:00Z");
+        createTimed(alice, "starts at end", "2026-09-29T16:00:00Z",
+                "2026-09-29T17:00:00Z");
+        String shanghai = createAllDay(alice, "Shanghai day", "2026-09-29",
+                "2026-09-30", "Asia/Shanghai");
+        String kiritimati = createAllDay(alice, "Other zone day", "2026-09-30",
+                "2026-10-01", "Pacific/Kiritimati");
+        createAllDay(alice, "Outside exact range", "2026-09-30",
+                "2026-10-01", "Asia/Shanghai");
+
+        String path = "/calendar?from=2026-09-28T16:00:00Z&to=2026-09-29T16:00:00Z"
+                + "&timezone=Asia/Shanghai";
+        JsonNode view = JSON.readTree(alice.call("GET", path, null, null).body());
+        assertEquals("2026-09-28T16:00:00Z", view.path("from").asText());
+        assertEquals("2026-09-29T16:00:00Z", view.path("to").asText());
+        assertEquals("Asia/Shanghai", view.path("timezone").asText());
+        assertTrue(view.path("asOf").asText().endsWith("Z"));
+        assertEquals(4, view.path("items").size());
+        assertEquals(first, view.path("items").get(0).path("id").asText());
+        assertEquals(shanghai, view.path("items").get(1).path("id").asText());
+        assertEquals(kiritimati, view.path("items").get(2).path("id").asText());
+        assertEquals(last, view.path("items").get(3).path("id").asText());
+        assertEquals(4, JSON.readTree(alice.call("GET", path + "&scope=MINE", null, null).body())
+                .path("items").size());
+        assertEquals(4, JSON.readTree(alice.call("GET", path + "&includeCancelled=true", null, null)
+                .body()).path("items").size());
+        assertEquals(0, JSON.readTree(alice.call("GET", path + "&scope=SHARED", null, null).body())
+                .path("items").size());
+        assertEquals(0, JSON.readTree(bob.call("GET", path, null, null).body())
+                .path("items").size());
+        assertEquals(400, alice.call("GET", path + "&scope=PARTNER", null, null).statusCode());
+        assertEquals(400, alice.call("GET", "/calendar?from=2026-09-28T16:00:01Z"
+                + "&to=2026-09-29T16:00:00Z&timezone=Asia/Shanghai", null, null).statusCode());
+        assertEquals(400, alice.call("GET", path.replace("Asia/Shanghai", "Invalid/Zone"),
+                null, null).statusCode());
+        assertEquals(400, alice.call("GET", "/calendar?from=%2B1000000000-12-30T00:00:00Z"
+                + "&to=%2B1000000000-12-31T00:00:00Z&timezone=UTC", null, null).statusCode());
+    }
+
+    @Test
+    void calendarRangeCountsLocalDaysAcrossDaylightSavingChanges() throws Exception {
+        Browser alice = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        createAllDay(alice, "Spring transition", "2026-03-08", "2026-03-09",
+                "America/New_York");
+        createAllDay(alice, "Autumn transition", "2026-11-01", "2026-11-02",
+                "America/New_York");
+        JsonNode spring = JSON.readTree(alice.call("GET", """
+                /calendar?from=2026-03-08T05:00:00Z&to=2026-03-09T04:00:00Z&timezone=America/New_York
+                """.trim(), null, null).body());
+        assertEquals(1, spring.path("items").size());
+        assertEquals("Spring transition", spring.path("items").get(0).path("title").asText());
+        JsonNode autumn = JSON.readTree(alice.call("GET", """
+                /calendar?from=2026-11-01T04:00:00Z&to=2026-11-02T05:00:00Z&timezone=America/New_York
+                """.trim(), null, null).body());
+        assertEquals(1, autumn.path("items").size());
+        assertEquals("Autumn transition", autumn.path("items").get(0).path("title").asText());
+        ZoneId zone = ZoneId.of("America/New_York");
+        for (int days : new int[]{7, 42, 93}) {
+            assertEquals(200, alice.call("GET", calendarPath(LocalDate.of(2026, 3, 7), days, zone),
+                    null, null).statusCode());
+        }
+        assertEquals(400, alice.call("GET", calendarPath(LocalDate.of(2026, 3, 7), 94, zone),
+                null, null).statusCode());
+        assertEquals(400, alice.call("GET", calendarPath(LocalDate.of(2026, 3, 7), 0, zone),
+                null, null).statusCode());
+        createAllDay(alice, "Final supported year", "9999-12-30", "9999-12-31",
+                "Asia/Shanghai");
+        JsonNode upperBound = JSON.readTree(alice.call("GET", calendarPath(
+                LocalDate.of(9999, 12, 30), 1, ZoneId.of("Asia/Shanghai")), null, null).body());
+        assertEquals(1, upperBound.path("items").size());
+        assertEquals("Final supported year", upperBound.path("items").get(0).path("title").asText());
+    }
+
+    private String createTimed(Browser browser, String title, String start, String end) throws Exception {
+        String body = "{\"title\":\"" + title + "\",\"allDay\":false,\"startsAt\":\"" + start
+                + "\",\"endsAt\":\"" + end + "\",\"eventTimezone\":\"Asia/Shanghai\","
+                + "\"availability\":\"BUSY\",\"note\":\"private\"}";
+        HttpResponse<String> response = browser.write("POST", "/events", body);
+        assertEquals(201, response.statusCode());
+        return JSON.readTree(response.body()).path("id").asText();
+    }
+
+    private String createAllDay(Browser browser, String title, String startDate,
+                                String endDateExclusive, String timezone) throws Exception {
+        String body = "{\"title\":\"" + title + "\",\"allDay\":true,\"startDate\":\""
+                + startDate + "\",\"endDateExclusive\":\"" + endDateExclusive
+                + "\",\"eventTimezone\":\"" + timezone + "\",\"availability\":\"BUSY\"}";
+        HttpResponse<String> response = browser.write("POST", "/events", body);
+        assertEquals(201, response.statusCode());
+        return JSON.readTree(response.body()).path("id").asText();
+    }
+
+    private String calendarPath(LocalDate first, int days, ZoneId zone) {
+        return "/calendar?from=" + first.atStartOfDay(zone).toInstant()
+                + "&to=" + first.plusDays(days).atStartOfDay(zone).toInstant()
+                + "&timezone=" + zone.getId();
     }
 
     @Test

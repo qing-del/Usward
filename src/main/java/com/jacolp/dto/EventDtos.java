@@ -2,6 +2,7 @@ package com.jacolp.dto;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 
 public final class EventDtos {
     private EventDtos() {
@@ -15,5 +16,9 @@ public final class EventDtos {
                          Instant offlineConfirmedAt, String status, String originInvitationId,
                          String pendingChangeInvitationId, String cancellationReason,
                          Void myReminder, Void myNotificationSetting) {
+    }
+
+    public record CalendarView(List<Detail> items, Instant from, Instant to,
+                               String timezone, Instant asOf) {
     }
 }

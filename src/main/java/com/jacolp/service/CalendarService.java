@@ -2,6 +2,7 @@ package com.jacolp.service;
 
 import com.jacolp.common.ApiException;
 import com.jacolp.dto.EventDtos;
+import com.jacolp.dto.CalendarQuery;
 import com.jacolp.dto.EventWriteRequest;
 import com.jacolp.entity.AppUser;
 import com.jacolp.entity.CalendarEvent;
@@ -10,6 +11,9 @@ import com.jacolp.mapper.UserMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -62,6 +66,28 @@ public class CalendarService {
         AppUser owner = owner(username, true);
         lockedVersion(id, owner.getId(), expectedVersion);
         changed(events.deleteOwned(id, owner.getId(), expectedVersion));
+    }
+
+    @Transactional(readOnly = true)
+    public EventDtos.CalendarView list(String username, CalendarQuery query) {
+        AppUser owner = owner(username, false);
+        Instant asOf = Instant.now();
+        if ("SHARED".equals(query.scope())) {
+            return new EventDtos.CalendarView(List.of(), query.from(), query.to(),
+                    query.timezone(), asOf);
+        }
+        List<CalendarEvent> matched = new ArrayList<>(events.timedInRange(owner.getId(),
+                query.fromUtc(), query.toUtc()));
+        for (CalendarEvent candidate : events.allDayCandidates(owner.getId(),
+                query.fromUtcDate(), query.toUtcDate())) {
+            if (EventTime.bounds(candidate).overlaps(query.from(), query.to())) {
+                matched.add(candidate);
+            }
+        }
+        matched.sort(Comparator.comparing((CalendarEvent event) -> EventTime.bounds(event).start())
+                .thenComparing(CalendarEvent::getId));
+        return new EventDtos.CalendarView(matched.stream().map(this::detail).toList(),
+                query.from(), query.to(), query.timezone(), asOf);
     }
 
     private AppUser owner(String username, boolean lock) {

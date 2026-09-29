@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片和个人事件读写接口。`static/UI` 仍是独立的浏览器演示，不会使用这些接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写和私人日历范围查询接口。`static/UI` 仍是独立的浏览器演示，不会使用这些接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
@@ -32,4 +32,6 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 `PATCH /me` 使用当前 `GET /me` 中的字符串 `version` 作为 `expectedVersion`，可修改昵称、`avatarStyle`、IANA `timezone`、`notificationEmail` 和 `shareAvailability`。邮箱使用单个地址，传 `null` 可清空；尚未提供 SMTP，因此 `mailReminderAvailable` 始终为 false。没有有效连接时不能开启忙闲共享。`POST /me/password` 接收 `{"oldPassword":"…","newPassword":"…"}`，成功返回 204 并使该账号全部 Session 失效；随后重新获取 CSRF 并登录。
 
-个人事件使用 `POST /events` 创建、`GET /events/{id}` 读取、`PATCH /events/{id}` 编辑、`DELETE /events/{id}` 删除。写入仅接受自己的事件字段，带时间形式为 `{"title":"阅读","allDay":false,"startsAt":"2026-09-29T09:00:00Z","endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai","availability":"BUSY"}`；全天形式改用 `startDate`、`endDateExclusive`。PATCH 修改时间或时区时须提交完整的一组时间字段；其它字段可单独修改。PATCH/DELETE 都要传字符串 `expectedVersion`，旧版本返回 409。`offlineConfirmed=true` 且不提供时间时由服务端记录当前时刻；再次提交 true 保留已有时间，false 清空。事件提醒、双人日历与忙闲读取尚未接入。
+个人事件使用 `POST /events` 创建、`GET /events/{id}` 读取、`PATCH /events/{id}` 编辑、`DELETE /events/{id}` 删除。写入仅接受自己的事件字段，带时间形式为 `{"title":"阅读","allDay":false,"startsAt":"2026-09-29T09:00:00Z","endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai","availability":"BUSY"}`；全天形式改用 `startDate`、`endDateExclusive`。PATCH 修改时间或时区时须提交完整的一组时间字段；其它字段可单独修改。PATCH/DELETE 都要传字符串 `expectedVersion`，旧版本返回 409。`offlineConfirmed=true` 且不提供时间时由服务端记录当前时刻；再次提交 true 保留已有时间，false 清空。
+
+`GET /calendar` 必须提供 UTC `Z` 格式的 `from`、`to` 和 IANA `timezone`。起止值应为查询时区中的当地日界，跨度为 1–93 个日历日，区间左闭右开；例如 `GET /calendar?from=2026-09-28T16:00:00Z&to=2026-09-29T16:00:00Z&timezone=Asia/Shanghai` 查询上海时区的 9 月 29 日。可选 `scope=ALL/MINE/SHARED` 和 `includeCancelled=false/true`；目前 ALL/MINE 仅返回本人事件，SHARED 返回空集合，个人事件无取消记录。结果按事件实际开始边界与 ID 升序排列。事件提醒、双人忙闲与共同事件尚未接入。

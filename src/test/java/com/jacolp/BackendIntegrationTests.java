@@ -209,6 +209,130 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void personalEventsAreOwnedVersionedAndUseExclusiveTimeStructures() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        JsonNode me = JSON.readTree(alice.login("alice", "A-user-test-password-21").body());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"x","allDay":false,"startsAt":"2026-09-29T09:00:00Z",
+                 "endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai",
+                 "availability":"BUSY","ownerId":"999"}
+                """).statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"x","allDay":false,"startsAt":"2026-09-29T09:00:00Z",
+                 "endsAt":"2026-09-29T10:00:00Z","startDate":"2026-09-29",
+                 "eventTimezone":"Asia/Shanghai","availability":"BUSY"}
+                """).statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"x","allDay":false,"startsAt":"2026-09-29T10:00:00Z",
+                 "endsAt":"2026-09-29T09:00:00Z","eventTimezone":"Asia/Shanghai",
+                 "availability":"BUSY"}
+                """).statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"x","allDay":false,"startsAt":"2026-09-29T09:00:00+00:00",
+                 "endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai",
+                 "availability":"BUSY"}
+                """).statusCode());
+
+        JsonNode created = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"Private event","allDay":false,"startsAt":"2026-09-29T09:00:00Z",
+                 "endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai",
+                 "availability":"NEGOTIABLE","location":"Home","note":"Only Alice knows",
+                 "shareTitle":true}
+                """).body());
+        String id = created.path("id").asText();
+        assertTrue(created.path("id").isTextual());
+        assertEquals("0", created.path("version").asText());
+        assertEquals("PERSONAL", created.path("kind").asText());
+        assertEquals(me.path("id").asText(), created.path("ownerId").asText());
+        assertTrue(created.path("connectionId").isNull());
+        assertTrue(created.path("myReminder").isNull());
+        assertTrue(created.path("myNotificationSetting").isNull());
+        assertEquals(404, bob.call("GET", "/events/" + id, null, null).statusCode());
+        assertEquals(404, bob.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"title\":\"Stolen\"}").statusCode());
+        assertEquals(404, bob.write("DELETE", "/events/" + id,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":0,\"title\":\"Invalid\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"status\":\"CANCELLED\"}").statusCode());
+        JsonNode edited = JSON.readTree(alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"title\":\"Changed\",\"location\":null}"
+        ).body());
+        assertEquals("1", edited.path("version").asText());
+        assertEquals("Changed", edited.path("title").asText());
+        assertTrue(edited.path("location").isNull());
+        assertEquals(409, alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"title\":\"Old\"}").statusCode());
+        assertEquals(409, alice.write("DELETE", "/events/" + id,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(204, alice.write("DELETE", "/events/" + id,
+                "{\"expectedVersion\":\"1\"}").statusCode());
+        assertEquals(404, alice.call("GET", "/events/" + id, null, null).statusCode());
+    }
+
+    @Test
+    void allDayEventKeepsItsTimezoneAndOfflineConfirmationHistory() throws Exception {
+        Browser alice = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"Skipped day","allDay":true,"startDate":"2011-12-30",
+                 "endDateExclusive":"2011-12-31","eventTimezone":"Pacific/Apia",
+                 "availability":"BUSY"}
+                """).statusCode());
+        assertEquals(400, alice.write("POST", "/events", """
+                {"title":"Wrong flag","allDay":true,"startDate":"2026-03-08",
+                 "endDateExclusive":"2026-03-09","eventTimezone":"America/New_York",
+                 "availability":"BUSY","offline":true}
+                """).statusCode());
+        JsonNode created = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"DST day","allDay":true,"startDate":"2026-03-08",
+                 "endDateExclusive":"2026-03-09","eventTimezone":"America/New_York",
+                 "availability":"BUSY","offlineConfirmed":true}
+                """).body());
+        String id = created.path("id").asText();
+        assertTrue(created.path("allDay").asBoolean());
+        assertTrue(created.path("startsAt").isNull());
+        assertEquals("2026-03-08", created.path("startDate").asText());
+        String confirmedAt = created.path("offlineConfirmedAt").asText();
+        assertTrue(confirmedAt.endsWith("Z"));
+        assertEquals(400, alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"offlineConfirmedAt\":\"2026-03-01T00:00:00Z\"}"
+        ).statusCode());
+        JsonNode kept = JSON.readTree(alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"0\",\"offlineConfirmed\":true}"
+        ).body());
+        assertEquals(confirmedAt, kept.path("offlineConfirmedAt").asText());
+        JsonNode cleared = JSON.readTree(alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"1\",\"offlineConfirmed\":false}"
+        ).body());
+        assertTrue(cleared.path("offlineConfirmedAt").isNull());
+        JsonNode explicit = JSON.readTree(alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"2\",\"offlineConfirmed\":true,"
+                        + "\"offlineConfirmedAt\":\"2026-03-01T00:00:00Z\"}"
+        ).body());
+        assertEquals("2026-03-01T00:00:00Z", explicit.path("offlineConfirmedAt").asText());
+        assertEquals(200, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"timezone\":\"Europe/London\"}"
+        ).statusCode());
+        JsonNode persisted = JSON.readTree(alice.call("GET", "/events/" + id, null, null).body());
+        assertEquals("America/New_York", persisted.path("eventTimezone").asText());
+        assertEquals("2026-03-08", persisted.path("startDate").asText());
+        assertEquals(400, alice.write("PATCH", "/events/" + id,
+                "{\"expectedVersion\":\"3\",\"eventTimezone\":\"Europe/London\"}"
+        ).statusCode());
+        JsonNode switched = JSON.readTree(alice.write("PATCH", "/events/" + id, """
+                {"expectedVersion":"3","allDay":false,"startsAt":"2026-03-08T10:00:00Z",
+                 "endsAt":"2026-03-08T11:00:00Z","eventTimezone":"Europe/London"}
+                """).body());
+        assertFalse(switched.path("allDay").asBoolean());
+        assertTrue(switched.path("startDate").isNull());
+        assertEquals("Europe/London", switched.path("eventTimezone").asText());
+    }
+
+    @Test
     void privateCardsNeverLeakAcrossAccounts() throws Exception {
         Browser alice = new Browser();
         Browser bob = new Browser();

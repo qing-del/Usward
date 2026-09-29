@@ -6,7 +6,7 @@
 
 定位：支持单人先用、双人连接的私密关系辅助网站。
 
-本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；初始化 SQL 已同步并纳入新库 Flyway V1，账号 Session 登录、个人资料维护与私密卡片个人功能已实现，其余后端模块及真实 SMTP 仍待实现。
+本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；初始化 SQL 已同步并纳入新库 Flyway V1，账号 Session 登录、个人资料维护、私密卡片个人功能和个人事件读写已实现，其余后端模块及真实 SMTP 仍待实现。
 
 ## 1. 目标与范围
 
@@ -423,7 +423,7 @@ app:
 
 承诺 DTO 返回派生字段 `deadlineAt`（统一排序边界，无截止为 null）、`isOverdue`、`isDueToday`。`isDueToday` 仅对未逾期的 `OPEN` 承诺成立：精确截止按读取者时区判断当天，日期截止按保存的 `dueTimezone` 判断当天。各次聚合使用同一个服务端 `asOf`，首页不能仅比较日期而忽略精确时刻。日期截止重新编辑仍显示日期模式与原时区；截止任一组成字段变更都按共享承诺截止变更通知处理。
 
-`offlineConfirmedAt` 仅用于个人事件：选中“线下确认”时若未填实际确认时间，以当前时刻生成 UTC 值；编辑已选中的条目保留原值，取消选中提交 null；重新勾选重新记录。服务端不接受 `offline` 演示布尔字段，也不将其当作另一方的系统确认。
+`offlineConfirmedAt` 仅用于个人事件。写入请求使用 `offlineConfirmed` 布尔值表示是否选中“线下确认”：true 且未提供 `offlineConfirmedAt` 时，已有记录保留原值，否则由服务端生成当前 UTC 时刻；true 且提供 UTC 时间时使用该时间；false 清空记录。提供 `offlineConfirmedAt` 时必须同时提供 `offlineConfirmed=true`；省略两者的 PATCH 保留原值。响应只回显 `offlineConfirmedAt`，服务端不接受 `offline` 演示布尔字段，也不将其当作另一方的系统确认。
 
 ### 11.3 资源 DTO 与正式枚举
 
@@ -441,7 +441,7 @@ app:
 
 列表与首页复用如下摘要：所有项包含 id；可变资源另含 version、createdAt、updatedAt。记忆摘要含 `ownerId, owner, title, category, tags, sourceType, sharedConnectionId`（owner 为公开用户摘要）；表达摘要含 `senderId, recipientId, type, responseWindow, responseMode, status, replyCount, lastReply`；邀约摘要含 `senderId, recipientId, purpose, title, 时间结构, status, expiresAt, targetEventId, eventId`；承诺摘要含 `ownerId, owner, title, nextAction, status, 截止字段及派生字段, sharedConnectionId`。日历项使用事件 DTO，提醒与通知列表使用各自完整 DTO。精选记忆使用记忆摘要，正文由详情读取；撤回表达始终使用占位 DTO。
 
-下列内容字段之外，通知相关接口仅额外接受 §11.10 明列的 notificationPlan、notificationMode 或通知降级凭据，不接受任意接收者字段。创建/编辑只接受相应业务可写字段：记忆为内容字段和 tags，表达创建为 type/body/responseWindow/responseMode，个人事件为标题/地点/备注/时间结构/availability/shareTitle/offlineConfirmedAt，邀约与修改提案为完整提议内容及可选 sourceExpressionId（仅 CREATE），承诺为标题/说明/下一步/截止字段/来源引用。关联表达须属于当前连接且未撤回。状态、分享关系、派生字段和全部服务端维护的关联 ID 不在通用可写字段中；状态变更走专用接口，承诺 complete 可带 result，reopen 清空旧 result，cancel 不写完成结果。各写入附带下文规定的版本或连接上下文。
+下列内容字段之外，通知相关接口仅额外接受 §11.10 明列的 notificationPlan、notificationMode 或通知降级凭据，不接受任意接收者字段。创建/编辑只接受相应业务可写字段：记忆为内容字段和 tags，表达创建为 type/body/responseWindow/responseMode，个人事件为标题/地点/备注/时间结构/availability/shareTitle/offlineConfirmed/offlineConfirmedAt，邀约与修改提案为完整提议内容及可选 sourceExpressionId（仅 CREATE），承诺为标题/说明/下一步/截止字段/来源引用。关联表达须属于当前连接且未撤回。状态、分享关系、派生字段和全部服务端维护的关联 ID 不在通用可写字段中；状态变更走专用接口，承诺 complete 可带 result，reopen 清空旧 result，cancel 不写完成结果。各写入附带下文规定的版本或连接上下文。
 
 `sharedConnectionId` 非空只表示该次分享的连接，读取仍需鉴权；不使用预览里的 `shared` 布尔值代替关系校验。详情可用动作由前端根据当前用户 ID、状态和本文规则推导，服务端每次写入重新校验。通知 `kind` 与资源类型分离，例如 `EVENT_CANCELLED` 引用 `CALENDAR_EVENT`，`REMINDER_DUE` 引用提醒目标；不能使用空资源 ID 的通用系统通知替代业务通知。
 

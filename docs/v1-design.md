@@ -6,7 +6,7 @@
 
 定位：支持单人先用、双人连接的私密关系辅助网站。
 
-本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；初始化 SQL 已同步并纳入新库 Flyway V1，账号 Session 登录与私密卡片个人功能已实现，其余后端模块及真实 SMTP 仍待实现。
+本版保留 [UI/API 审计](./ui-api-audit.md) 中 G01–G08 的设计决策与 U01–U08 的交付验收，统一三档通知与发起时的双向通知配置，数据库持久队列同时承接业务通知和私人到时提醒，不引入 RabbitMQ。本文规定正式实现的目标契约；[HTML 预览](../static/UI/README.md) 已同步相应页面交互，但仍使用本地模拟数据，接口路径不代表后端已实现。预览覆盖与边界见 [UI 同步记录](../static/UI/DESIGN-SYNC.md)；初始化 SQL 已同步并纳入新库 Flyway V1，账号 Session 登录、个人资料维护与私密卡片个人功能已实现，其余后端模块及真实 SMTP 仍待实现。
 
 ## 1. 目标与范围
 
@@ -394,6 +394,7 @@ app:
 ### 11.1 身份、资料与连接邀请
 
 - `GET /me` 返回 `{id, username, nickname, avatarStyle, timezone, notificationEmail, mailReminderAvailable, shareAvailability, version, stats}`；`stats` 为自己的 `{openCommitmentCount, archivedMemoryCount}` 全量计数。`mailReminderAvailable` 保留既有字段名，表示本人接收业务邮件及私人提醒的能力，由服务端根据邮件启用状态、必需配置及本人有效收件邮箱派生，不接受客户端写入，也不代表 SMTP 连通性已验证。`PATCH /me` 只接受昵称、头像、时区、`notificationEmail`、忙闲开关及 `expectedVersion`；邮箱只接受单个有效地址，null 表示清空，省略表示不修改。地址变化时在同一资料事务内取消本人 `QUEUED/PROCESSING` 邮件任务并使其 token 失效。密码接口接收 `{oldPassword, newPassword}`，校验成功后使包括当前会话在内的已有 Session 失效。
+- 未连接或连接无效时不能将 `shareAvailability` 设为 true，返回 `409 CONNECTION_REQUIRED`；设为 false 可随时执行。当前密码不正确返回 `400 CURRENT_PASSWORD_INVALID`；连续失败触发基础限流。尚未配置 SMTP 时可保存邮箱，但 `mailReminderAvailable=false`。
 - 公开用户摘要仅含 `{id, nickname, avatarStyle}`；连接、分享者、表达参与者使用该摘要，不返回对方账号、时区、邮箱或完整用户设置。前端不提交 `me/partner` 身份、`signedIn`、owner 或 sender；服务端从 Session 和当前有效连接确定归属及接收者。
 - `GET /connection` 返回 `{connection, currentInvite}`。未连接时 `connection=null`；连接时为 `{id, status: ACTIVE, version, members: [公开用户摘要]}`。`currentInvite` 仅为本人未过期的待发邀请 `{id, status: PENDING, expiresAt, version}`，不存在则为 `null`，永不含 token；读取时按当前时间过滤过期记录。对方忙闲共享状态从 §11.5 的 availability DTO 读取。
 - `POST /connection-invites` 返回 `{id, token, expiresAt, status, version}`；生成新口令时锁定邀请者并撤销其旧待发邀请。preview 接收 `{token}`，返回 `{id, inviter, expiresAt, version}`；accept 接收 `{token, expectedVersion}`，版本针对预览的邀请，返回连接 DTO。revoke 接收 `{expectedVersion}`；成功返回撤销后的邀请元数据。

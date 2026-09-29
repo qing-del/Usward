@@ -47,6 +47,10 @@ class BackendIntegrationTests {
 
     @BeforeEach
     void freshAccounts() {
+        jdbc.update("DELETE FROM notification_delivery");
+        jdbc.update("DELETE FROM notification");
+        jdbc.update("DELETE FROM calendar_event");
+        jdbc.update("DELETE FROM pair_connection");
         jdbc.update("DELETE FROM memory_tag");
         jdbc.update("DELETE FROM memory_card");
         jdbc.update("DELETE FROM SPRING_SESSION_ATTRIBUTES");
@@ -88,6 +92,117 @@ class BackendIntegrationTests {
         assertEquals(200, again.login("alice", "A-user-test-password-21").statusCode());
         accounts.resetPassword("alice", "A-new-test-password-21");
         assertEquals(401, again.call("GET", "/me", null, null).statusCode());
+        assertEquals(0L, orphanSessionAttributes());
+        assertEquals(401, new Browser().login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, new Browser().login("alice", "A-new-test-password-21").statusCode());
+    }
+
+    @Test
+    void profileUpdatesValidateFieldsVersionsAndConnectionState() throws Exception {
+        Browser alice = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(403, alice.call("PATCH", "/me", "{\"expectedVersion\":\"0\",\"nickname\":\"A\"}",
+                null).statusCode());
+        assertEquals(400, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":0,\"nickname\":\"A\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"avatarStyle\":\"UNKNOWN\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"timezone\":\"No/Such_Zone\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"notificationEmail\":\"a@example.com,b@example.com\"}"
+        ).statusCode());
+        assertEquals(400, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"ownerId\":\"999\"}").statusCode());
+        assertEquals(409, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"shareAvailability\":true}").statusCode());
+
+        JsonNode changed = JSON.readTree(alice.write("PATCH", "/me", """
+                {"expectedVersion":"0","nickname":"Alice New","avatarStyle":"FLOWER",
+                 "timezone":"America/New_York","notificationEmail":"alice@example.com",
+                 "shareAvailability":false}
+                """).body());
+        assertEquals("1", changed.path("version").asText());
+        assertEquals("Alice New", changed.path("nickname").asText());
+        assertEquals("FLOWER", changed.path("avatarStyle").asText());
+        assertEquals("America/New_York", changed.path("timezone").asText());
+        assertEquals("alice@example.com", changed.path("notificationEmail").asText());
+        assertFalse(changed.path("mailReminderAvailable").asBoolean());
+        assertEquals(409, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"nickname\":\"stale\"}").statusCode());
+        assertEquals("Alice New", JSON.readTree(alice.call("GET", "/me", null, null).body())
+                .path("nickname").asText());
+
+        long aliceId = Long.parseLong(changed.path("id").asText());
+        long bobId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'bob'", Long.class);
+        jdbc.update("INSERT INTO pair_connection (user_a_id, user_b_id) VALUES (?, ?)", aliceId, bobId);
+        long connectionId = jdbc.queryForObject("SELECT MAX(id) FROM pair_connection", Long.class);
+        jdbc.update("UPDATE app_user SET active_connection_id = ? WHERE id = ?", connectionId, aliceId);
+        assertEquals(200, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"1\",\"shareAvailability\":true}").statusCode());
+        assertTrue(JSON.readTree(alice.call("GET", "/me", null, null).body())
+                .path("shareAvailability").asBoolean());
+    }
+
+    @Test
+    void changingEmailCancelsOldAddressDeliveries() throws Exception {
+        Browser alice = new Browser();
+        JsonNode me = JSON.readTree(alice.login("alice", "A-user-test-password-21").body());
+        long id = Long.parseLong(me.path("id").asText());
+        assertEquals(200, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"notificationEmail\":\"old@example.com\"}"
+        ).statusCode());
+        jdbc.update("INSERT INTO memory_card (owner_id, body) VALUES (?, 'seed')", id);
+        long cardId = jdbc.queryForObject("SELECT MAX(id) FROM memory_card", Long.class);
+        for (int index = 0; index < 2; index++) {
+            jdbc.update("""
+                    INSERT INTO notification (recipient_id, kind, resource_type, resource_id,
+                                              message, dedupe_key)
+                    VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', ?)
+                    """, id, cardId, "email-change-" + index);
+            long notificationId = jdbc.queryForObject("SELECT MAX(id) FROM notification", Long.class);
+            jdbc.update("""
+                    INSERT INTO notification_delivery
+                      (notification_id, source_type, recipient_id, channel, to_address,
+                       status, lock_token, lease_until)
+                    VALUES (?, 'BUSINESS', ?, 'MAIL', 'old@example.com', ?, ?, ?)
+                    """, notificationId, id, index == 0 ? "QUEUED" : "PROCESSING",
+                    index == 0 ? null : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    index == 0 ? null : java.time.LocalDateTime.now().plusMinutes(2));
+        }
+        JsonNode updated = JSON.readTree(alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"1\",\"notificationEmail\":\"new@example.com\"}"
+        ).body());
+        assertEquals("new@example.com", updated.path("notificationEmail").asText());
+        assertEquals(2L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification_delivery
+                WHERE recipient_id = ? AND status = 'CANCELLED'
+                  AND lock_token IS NULL AND lease_until IS NULL
+                """, Long.class, id));
+        assertEquals(0L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification_delivery
+                WHERE recipient_id = ? AND status IN ('QUEUED', 'PROCESSING')
+                """, Long.class, id));
+    }
+
+    @Test
+    void passwordChangeRevokesCurrentAndOtherSessions() throws Exception {
+        Browser alice = new Browser();
+        Browser second = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, second.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        assertEquals(400, alice.write("POST", "/me/password", """
+                {"oldPassword":"wrong","newPassword":"A-new-test-password-21"}
+                """).statusCode());
+        assertEquals(200, second.call("GET", "/me", null, null).statusCode());
+        assertEquals(204, alice.write("POST", "/me/password", """
+                {"oldPassword":"A-user-test-password-21","newPassword":"A-new-test-password-21"}
+                """).statusCode());
+        assertEquals(401, alice.call("GET", "/me", null, null).statusCode());
+        assertEquals(401, second.call("GET", "/me", null, null).statusCode());
+        assertEquals(200, bob.call("GET", "/me", null, null).statusCode());
         assertEquals(0L, orphanSessionAttributes());
         assertEquals(401, new Browser().login("alice", "A-user-test-password-21").statusCode());
         assertEquals(200, new Browser().login("alice", "A-new-test-password-21").statusCode());

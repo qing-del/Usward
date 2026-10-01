@@ -6,6 +6,7 @@ import { session } from '../session'
 
 const route = useRoute()
 const items = [
+  { to: '/calendar', label: '日历', symbol: '▦' },
   { to: '/memories', label: '记忆', symbol: '✿' },
   { to: '/me', label: '我的', symbol: '◌' },
 ]

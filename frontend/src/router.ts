@@ -3,6 +3,7 @@ import { ensureSession, session } from './session'
 import LoginPage from './pages/LoginPage.vue'
 import MePage from './pages/MePage.vue'
 import MemoriesPage from './pages/MemoriesPage.vue'
+import CalendarPage from './pages/CalendarPage.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -11,6 +12,7 @@ export const router = createRouter({
     { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
     { path: '/me', name: 'me', component: MePage },
     { path: '/memories', name: 'memories', component: MemoriesPage },
+    { path: '/calendar', name: 'calendar', component: CalendarPage },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import { ApiError, errorMessage } from '../api'
-import { availabilityLabels, eventsOnDay, getCalendar, getEvent } from '../calendar'
+import { availabilityLabels, createEvent, deleteEvent, eventsOnDay, getCalendar, getEvent,
+  patchEvent } from '../calendar'
 import type { CalendarEvent } from '../calendar'
+import { eventWriteValues } from '../eventWrite'
+import type { EventDraft } from '../eventWrite'
 import { session } from '../session'
-import { addDays, calendarBounds, daysBetween, mondayOf, today } from '../time'
+import { addDays, calendarBounds, daysBetween, localCandidates, mondayOf, offsetAt, today,
+  toLocal } from '../time'
 
 type Mode = 'agenda' | 'week' | 'month' | 'range'
 const route = useRoute()
@@ -30,6 +34,19 @@ const detailOpen = ref(false)
 const detail = ref<CalendarEvent | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+const eventFormOpen = ref(false)
+const editingId = ref<string | null>(null)
+const editVersion = ref('')
+const latestVersion = ref<string | null>(null)
+const formPending = ref(false)
+const formError = ref('')
+const confirmDelete = ref(false)
+const deletePending = ref(false)
+const eventDraft = reactive<EventDraft>({
+  title: '', location: '', note: '', allDay: false, startsLocal: '', endsLocal: '',
+  startOffset: '', endOffset: '', startDate: '', lastDate: '',
+  eventTimezone: 'Asia/Shanghai', availability: 'BUSY', offlineConfirmed: false,
+})
 let controller: AbortController | null = null
 let sequence = 0
 
@@ -132,6 +149,7 @@ async function openEvent(id: string) {
   detail.value = null
   detailError.value = ''
   detailLoading.value = true
+  confirmDelete.value = false
   try { detail.value = await getEvent(id) }
   catch (cause) {
     detailError.value = cause instanceof ApiError && cause.status === 404
@@ -141,13 +159,110 @@ async function openEvent(id: string) {
 
 function closeEvent() { detailOpen.value = false; detail.value = null }
 function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.value === 'range') mode.value = 'agenda' }
+
+function openCreate() {
+  const day = selectedDay.value < today(timezone.value) ? today(timezone.value) : selectedDay.value
+  Object.assign(eventDraft, { title: '', location: '', note: '', allDay: false,
+    startsLocal: `${day}T18:00`, endsLocal: `${day}T19:00`, startOffset: '', endOffset: '',
+    startDate: day, lastDate: day, eventTimezone: timezone.value,
+    availability: 'BUSY', offlineConfirmed: false })
+  editingId.value = null
+  editVersion.value = ''
+  latestVersion.value = null
+  formError.value = ''
+  eventFormOpen.value = true
+}
+
+function openEdit() {
+  if (!detail.value) return
+  const event = detail.value
+  const startDay = event.allDay ? event.startDate! : toLocal(event.startsAt!, event.eventTimezone).slice(0, 10)
+  Object.assign(eventDraft, { title: event.title, location: event.location ?? '', note: event.note ?? '',
+    allDay: event.allDay,
+    startsLocal: event.startsAt ? toLocal(event.startsAt, event.eventTimezone) : `${startDay}T18:00`,
+    endsLocal: event.endsAt ? toLocal(event.endsAt, event.eventTimezone) : `${startDay}T19:00`,
+    startOffset: event.startsAt ? offsetAt(event.startsAt, event.eventTimezone) : '',
+    endOffset: event.endsAt ? offsetAt(event.endsAt, event.eventTimezone) : '',
+    startDate: event.startDate ?? startDay,
+    lastDate: event.endDateExclusive ? addDays(event.endDateExclusive, -1) : startDay,
+    eventTimezone: event.eventTimezone, availability: event.availability,
+    offlineConfirmed: !!event.offlineConfirmedAt })
+  editingId.value = event.id
+  editVersion.value = event.version
+  latestVersion.value = null
+  formError.value = ''
+  detailOpen.value = false
+  eventFormOpen.value = true
+}
+
+function candidates(value: string) {
+  if (!value) return []
+  try { return localCandidates(value, eventDraft.eventTimezone) }
+  catch { return [] }
+}
+
+async function saveEvent() {
+  if (formPending.value) return
+  formError.value = ''
+  let write
+  try { write = eventWriteValues(eventDraft, editingId.value === null) }
+  catch (cause) { formError.value = cause instanceof Error ? cause.message : '安排时间无效。'; return }
+  formPending.value = true
+  try {
+    const saved = editingId.value
+      ? await patchEvent(editingId.value, editVersion.value, write) : await createEvent(write)
+    detail.value = saved
+    eventFormOpen.value = false
+    detailOpen.value = true
+    latestVersion.value = null
+    await load()
+  } catch (cause) {
+    formError.value = errorMessage(cause)
+    if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && editingId.value) {
+      try { latestVersion.value = (await getEvent(editingId.value)).version }
+      catch { /* Retain the draft. */ }
+    }
+  } finally { formPending.value = false }
+}
+
+function useLatestVersion() {
+  if (!latestVersion.value) return
+  editVersion.value = latestVersion.value
+  latestVersion.value = null
+  formError.value = '请核对当前输入，然后再次保存。'
+}
+
+function cancelEventForm() {
+  if (formPending.value) return
+  eventFormOpen.value = false
+  if (editingId.value && detail.value) detailOpen.value = true
+}
+
+async function removeEvent() {
+  if (!detail.value || deletePending.value) return
+  detailError.value = ''
+  deletePending.value = true
+  try {
+    await deleteEvent(detail.value.id, detail.value.version)
+    detailOpen.value = false
+    detail.value = null
+    confirmDelete.value = false
+    await load()
+  } catch (cause) {
+    detailError.value = errorMessage(cause)
+    if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
+      try { detail.value = await getEvent(detail.value.id) } catch { /* Keep the error visible. */ }
+    }
+  } finally { deletePending.value = false }
+}
 </script>
 
 <template>
   <AppShell>
     <div class="page-heading"><div><span class="eyebrow">TIME FOR MYSELF</span>
       <h1 class="serif">为时间，留一点余地。</h1>
-      <p class="subtitle">自己的安排好好记；目前这里显示的都是私人日程。</p></div></div>
+      <p class="subtitle">自己的安排好好记；目前这里显示的都是私人日程。</p></div>
+      <button class="btn primary" @click="openCreate">＋ 个人安排</button></div>
     <div class="calendar-layout"><section class="calendar-main">
       <div class="calendar-toolbar"><div class="calendar-nav">
         <h2>{{ headerLabel() }}</h2>
@@ -188,7 +303,8 @@ function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.va
             <button v-if="itemsOn(day).length > 2" class="month-more" @click="chooseDay(day)">还有 {{ itemsOn(day).length - 2 }} 项</button></div></div>
       </div><div class="calendar-legend"><span>● 我的安排</span><small>{{ timezone }}</small></div>
     </section><aside class="calendar-aside"><div class="card soft"><h2>属于自己的时间</h2>
-      <p class="muted mt-8">安排默认私密。连接、忙闲展示与共同邀约将在相应后端能力完成后接入。</p></div>
+      <p class="muted mt-8">安排默认私密。连接、忙闲展示与共同邀约将在相应后端能力完成后接入。</p>
+      <button class="btn secondary mt-16" @click="openCreate">记一段个人安排</button></div>
       <div class="inline-note">不必把每天填满。记下重要的安排，也给日常留一点余地。</div></aside></div>
 
     <BaseDialog :open="rangeDialog" title="选择日历日期范围" @close="rangeDialog = false">
@@ -200,7 +316,7 @@ function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.va
         <div class="dialog-actions"><button class="btn secondary" type="button" @click="rangeDialog = false">取消</button>
           <button class="btn primary" type="submit">查看安排</button></div></form>
     </BaseDialog>
-    <BaseDialog :open="detailOpen" :title="detail?.title || '个人安排'" @close="closeEvent">
+    <BaseDialog :open="detailOpen" :title="detail?.title || '个人安排'" :busy="deletePending" @close="closeEvent">
       <div v-if="detailLoading" class="loading-state" role="status">正在读取安排…</div>
       <template v-else-if="detail"><div class="detail-meta"><span class="badge green">个人安排</span>
         <span v-if="detail.offlineConfirmedAt" class="badge peach">由我记录，线下确认</span></div>
@@ -208,8 +324,57 @@ function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.va
         <p class="detail-line"><strong>时间状态</strong>{{ availabilityLabels[detail.availability] }}</p>
         <p v-if="detail.location" class="detail-line"><strong>地点</strong>{{ detail.location }}</p>
         <p v-if="detail.note" class="detail-line"><strong>私人备注</strong><span class="detail-body">{{ detail.note }}</span></p>
+        <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这段安排将从日历移除。确定删除？</p>
+          <button class="btn danger mt-16" :disabled="deletePending" @click="removeEvent">{{ deletePending ? '正在删除…' : '确认删除' }}</button>
+          <button class="text-button" @click="confirmDelete = false">再想一下</button></div>
+        <div v-else class="dialog-actions"><button class="text-button danger" @click="confirmDelete = true">删除安排</button>
+          <button class="btn primary" @click="openEdit">编辑安排</button></div>
       </template>
       <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
+    </BaseDialog>
+    <BaseDialog :open="eventFormOpen" :title="editingId ? '编辑个人安排' : '为自己留一段时间'"
+      :wide="true" :busy="formPending" @close="cancelEventForm">
+      <form class="form-stack" @submit.prevent="saveEvent">
+        <div class="field"><label for="event-title">安排标题</label>
+          <input id="event-title" v-model="eventDraft.title" required maxlength="100" placeholder="这段时间想做什么？" /></div>
+        <label class="checkbox-label"><input v-model="eventDraft.allDay" type="checkbox" /> 全天安排</label>
+        <template v-if="!eventDraft.allDay"><div class="form-grid">
+          <div class="field"><label for="event-start">开始时间</label>
+            <input id="event-start" v-model="eventDraft.startsLocal" type="datetime-local" required
+              @input="eventDraft.startOffset = ''" />
+            <p v-if="eventDraft.startsLocal && !candidates(eventDraft.startsLocal).length" class="form-error">这个当地时刻不存在，请重新选择。</p>
+            <select v-if="candidates(eventDraft.startsLocal).length > 1" v-model="eventDraft.startOffset"
+              class="select-input" aria-label="开始时间的 UTC 偏移" required>
+              <option value="">选择重复时刻的 UTC 偏移</option>
+              <option v-for="candidate in candidates(eventDraft.startsLocal)" :key="candidate.offset" :value="candidate.offset">UTC{{ candidate.offset }}</option></select></div>
+          <div class="field"><label for="event-end">结束时间</label>
+            <input id="event-end" v-model="eventDraft.endsLocal" type="datetime-local" required
+              @input="eventDraft.endOffset = ''" />
+            <p v-if="eventDraft.endsLocal && !candidates(eventDraft.endsLocal).length" class="form-error">这个当地时刻不存在，请重新选择。</p>
+            <select v-if="candidates(eventDraft.endsLocal).length > 1" v-model="eventDraft.endOffset"
+              class="select-input" aria-label="结束时间的 UTC 偏移" required>
+              <option value="">选择重复时刻的 UTC 偏移</option>
+              <option v-for="candidate in candidates(eventDraft.endsLocal)" :key="candidate.offset" :value="candidate.offset">UTC{{ candidate.offset }}</option></select></div></div></template>
+        <div v-else class="form-grid"><div class="field"><label for="event-start-date">开始日期</label>
+          <input id="event-start-date" v-model="eventDraft.startDate" type="date" required /></div>
+          <div class="field"><label for="event-last-date">结束日期（包含当天）</label>
+            <input id="event-last-date" v-model="eventDraft.lastDate" type="date" required /></div></div>
+        <p class="field-help">本安排时区：{{ eventDraft.eventTimezone }}。更改个人显示时区不会改写安排原有时间。</p>
+        <div class="form-grid"><div class="field"><label for="event-availability">我的时间状态</label>
+          <select id="event-availability" v-model="eventDraft.availability">
+            <option v-for="(label, value) in availabilityLabels" :key="value" :value="value">{{ label }}</option></select></div>
+          <div class="field"><label for="event-location">地点 <small>可选</small></label>
+            <input id="event-location" v-model="eventDraft.location" maxlength="255" /></div></div>
+        <div class="field"><label for="event-note">私人备注 <small>可选</small></label>
+          <textarea id="event-note" v-model="eventDraft.note" maxlength="5000" rows="3" /></div>
+        <label class="checkbox-label"><input v-model="eventDraft.offlineConfirmed" type="checkbox" /> 由我记录，线下已确认</label>
+        <div class="inline-note">这仍是个人安排，不代表对方在系统中确认。标题和备注目前只对自己可见。</div>
+        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+        <div v-if="latestVersion" class="inline-note peach"><p>安排在其他位置发生了变化。当前输入已保留。</p>
+          <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>
+        <div class="dialog-actions"><button type="button" class="btn secondary" @click="cancelEventForm">取消</button>
+          <button type="submit" class="btn primary" :disabled="formPending">{{ formPending ? '正在保存…' : '保存个人安排' }}</button></div>
+      </form>
     </BaseDialog>
   </AppShell>
 </template>

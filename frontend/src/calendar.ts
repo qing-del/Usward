@@ -1,5 +1,6 @@
 import { query, request } from './api'
 import { addDays, calendarBounds, startOfDay } from './time'
+import type { EventWrite } from './eventWrite'
 
 export type Availability = 'BUSY' | 'NEGOTIABLE' | 'FREE'
 export const availabilityLabels: Record<Availability, string> = {
@@ -51,6 +52,20 @@ export function getCalendar(fromDay: string, toDayExclusive: string, timezone: s
 
 export function getEvent(id: string): Promise<CalendarEvent> {
   return request<CalendarEvent>('GET', `/events/${encodeURIComponent(id)}`)
+}
+
+export function createEvent(write: EventWrite): Promise<CalendarEvent> {
+  return request<CalendarEvent>('POST', '/events', write)
+}
+
+export function patchEvent(id: string, expectedVersion: string,
+  write: EventWrite): Promise<CalendarEvent> {
+  return request<CalendarEvent>('PATCH', `/events/${encodeURIComponent(id)}`,
+    { expectedVersion, ...write })
+}
+
+export function deleteEvent(id: string, expectedVersion: string): Promise<void> {
+  return request<void>('DELETE', `/events/${encodeURIComponent(id)}`, { expectedVersion })
 }
 
 export function eventBounds(event: CalendarEvent): { start: string; end: string } {

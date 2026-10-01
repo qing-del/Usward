@@ -6,6 +6,7 @@ import { session } from '../session'
 
 const route = useRoute()
 const items = [
+  { to: '/memories', label: '记忆', symbol: '✿' },
   { to: '/me', label: '我的', symbol: '◌' },
 ]
 const title = computed(() => items.find(item => item.to === route.path)?.label ?? '我的空间')
@@ -26,7 +27,7 @@ const title = computed(() => items.find(item => item.to === route.path)?.label ?
       </nav>
       <div class="side-note"><span class="note-flower">✿</span><p>不必事事完美，<br />愿我们好好记得。</p></div>
       <RouterLink to="/me" class="side-user" v-if="session.user">
-        <Avatar :nickname="session.user.nickname" :style="session.user.avatarStyle" small />
+        <Avatar :nickname="session.user.nickname" :avatar-style="session.user.avatarStyle" small />
         <span><strong>{{ session.user.nickname }}</strong><small>我的私人空间</small></span>
       </RouterLink>
     </aside>
@@ -35,7 +36,7 @@ const title = computed(() => items.find(item => item.to === route.path)?.label ?
         <div class="breadcrumb">我的空间 <span>/</span> <strong>{{ title }}</strong></div>
         <RouterLink to="/me" class="top-user" v-if="session.user">
           <span class="top-private">仅自己可见</span>
-          <Avatar :nickname="session.user.nickname" :style="session.user.avatarStyle" small />
+          <Avatar :nickname="session.user.nickname" :avatar-style="session.user.avatarStyle" small />
         </RouterLink>
       </header>
       <main id="main-content" class="page-content" tabindex="-1"><slot /></main>

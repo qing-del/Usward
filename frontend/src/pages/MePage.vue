@@ -115,7 +115,7 @@ async function signOut() {
     <div class="settings-grid" v-if="session.user">
       <section class="card profile-card">
         <div class="section-heading"><h2>个人资料</h2><span class="badge">仅自己可见</span></div>
-        <div class="profile-preview"><Avatar :nickname="form.nickname || session.user.nickname" :style="form.avatarStyle" />
+        <div class="profile-preview"><Avatar :nickname="form.nickname || session.user.nickname" :avatar-style="form.avatarStyle" />
           <div><strong>{{ form.nickname || session.user.nickname }}</strong><small>@{{ session.user.username }}</small></div></div>
         <form class="form-stack" @submit.prevent="saveProfile">
           <div class="field"><label for="nickname">昵称</label>
@@ -124,7 +124,7 @@ async function signOut() {
             <label v-for="choice in avatars" :key="choice.value" class="avatar-choice"
               :class="{ selected: form.avatarStyle === choice.value }">
               <input v-model="form.avatarStyle" type="radio" name="avatar" :value="choice.value" />
-              <Avatar :nickname="form.nickname || session.user.nickname" :style="choice.value" small />
+              <Avatar :nickname="form.nickname || session.user.nickname" :avatar-style="choice.value" small />
               <span>{{ choice.label }}</span></label></fieldset>
           <div class="field"><label for="timezone">显示时区</label>
             <input id="timezone" v-model="form.timezone" list="common-timezones" required maxlength="64"

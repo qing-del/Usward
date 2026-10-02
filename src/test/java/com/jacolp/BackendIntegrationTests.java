@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.jacolp.service.AccountService;
+import com.jacolp.service.CalendarService;
+import com.jacolp.service.MemoryService;
+import com.jacolp.mapper.UserMapper;
 import java.net.CookieManager;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -44,6 +47,9 @@ class BackendIntegrationTests {
 
     @Autowired JdbcTemplate jdbc;
     @Autowired AccountService accounts;
+    @Autowired CalendarService calendar;
+    @Autowired MemoryService memories;
+    @Autowired UserMapper users;
     @Autowired JdbcIndexedSessionRepository sessions;
     @Value("${local.server.port}") int port;
 
@@ -308,6 +314,58 @@ class BackendIntegrationTests {
                 .path("stats").path("openCommitmentCount").asInt());
         assertEquals(1, JSON.readTree(alice.call("GET", "/commitments?status=DONE", null,
                 null).body()).path("total").asInt());
+    }
+
+    @Test
+    void dashboardReadHelpersUsePersonalCalendarBoundsAndLatestVisibleMemory() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        long aliceId = users.findByUsername("alice").getId();
+        long bobId = users.findByUsername("bob").getId();
+        String firstCard = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"first private\",\"title\":\"first\",\"tags\":[\"own\"]}"
+        ).body()).path("id").asText();
+        String laterCard = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"later private\",\"title\":\"later\"}"
+        ).body()).path("id").asText();
+        assertEquals(laterCard, memories.latestOwnSummary(users.findByUsername("alice")).id());
+        assertTrue(memories.latestOwnSummary(users.findByUsername("alice")).tags().isEmpty());
+        assertEquals(201, bob.write("POST", "/memories",
+                "{\"body\":\"Bob secret\"}").statusCode());
+        assertTrue(memories.latestOwnSummary(users.findByUsername("bob")) != null);
+        assertEquals(200, alice.write("POST", "/memories/" + laterCard + "/archive",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(firstCard, memories.latestOwnSummary(users.findByUsername("alice")).id());
+        assertEquals("own", memories.latestOwnSummary(users.findByUsername("alice"))
+                .tags().getFirst());
+
+        String springId = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"spring day","allDay":true,"startDate":"2026-03-08",
+                 "endDateExclusive":"2026-03-09","eventTimezone":"America/New_York",
+                 "availability":"BUSY"}
+                """).body()).path("id").asText();
+        String fallId = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"fall day","allDay":true,"startDate":"2026-11-01",
+                 "endDateExclusive":"2026-11-02","eventTimezone":"America/New_York",
+                 "availability":"BUSY"}
+                """).body()).path("id").asText();
+        String boundaryId = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"next day","allDay":false,"startsAt":"2026-03-09T04:00:00Z",
+                 "endsAt":"2026-03-09T05:00:00Z","eventTimezone":"America/New_York",
+                 "availability":"BUSY"}
+                """).body()).path("id").asText();
+        assertEquals(springId, calendar.personalDay(aliceId, LocalDate.parse("2026-03-08"),
+                ZoneId.of("America/New_York")).getFirst().id());
+        assertEquals(1, calendar.personalDay(aliceId, LocalDate.parse("2026-03-08"),
+                ZoneId.of("America/New_York")).size());
+        assertEquals(boundaryId, calendar.personalDay(aliceId, LocalDate.parse("2026-03-09"),
+                ZoneId.of("America/New_York")).getFirst().id());
+        assertEquals(fallId, calendar.personalDay(aliceId, LocalDate.parse("2026-11-01"),
+                ZoneId.of("America/New_York")).getFirst().id());
+        assertTrue(calendar.personalDay(bobId, LocalDate.parse("2026-03-08"),
+                ZoneId.of("America/New_York")).isEmpty());
     }
 
     @Test

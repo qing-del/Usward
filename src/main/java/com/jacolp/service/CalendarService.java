@@ -9,7 +9,9 @@ import com.jacolp.entity.CalendarEvent;
 import com.jacolp.mapper.CalendarMapper;
 import com.jacolp.mapper.UserMapper;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -76,18 +78,30 @@ public class CalendarService {
             return new EventDtos.CalendarView(List.of(), query.from(), query.to(),
                     query.timezone(), asOf);
         }
-        List<CalendarEvent> matched = new ArrayList<>(events.timedInRange(owner.getId(),
-                query.fromUtc(), query.toUtc()));
-        for (CalendarEvent candidate : events.allDayCandidates(owner.getId(),
-                query.fromUtcDate(), query.toUtcDate())) {
-            if (EventTime.bounds(candidate).overlaps(query.from(), query.to())) {
+        return new EventDtos.CalendarView(inRange(owner.getId(), query.from(), query.to()),
+                query.from(), query.to(), query.timezone(), asOf);
+    }
+
+    @Transactional(readOnly = true)
+    public List<EventDtos.Detail> personalDay(long ownerId, LocalDate date, ZoneId zone) {
+        Instant from = EventTime.dayStart(date, zone);
+        Instant to = EventTime.dayStart(date.plusDays(1), zone);
+        return inRange(ownerId, from, to);
+    }
+
+    private List<EventDtos.Detail> inRange(long ownerId, Instant from, Instant to) {
+        LocalDateTime fromUtc = LocalDateTime.ofInstant(from, ZoneOffset.UTC);
+        LocalDateTime toUtc = LocalDateTime.ofInstant(to, ZoneOffset.UTC);
+        List<CalendarEvent> matched = new ArrayList<>(events.timedInRange(ownerId, fromUtc, toUtc));
+        for (CalendarEvent candidate : events.allDayCandidates(ownerId,
+                fromUtc.toLocalDate(), toUtc.toLocalDate())) {
+            if (EventTime.bounds(candidate).overlaps(from, to)) {
                 matched.add(candidate);
             }
         }
         matched.sort(Comparator.comparing((CalendarEvent event) -> EventTime.bounds(event).start())
                 .thenComparing(CalendarEvent::getId));
-        return new EventDtos.CalendarView(matched.stream().map(this::detail).toList(),
-                query.from(), query.to(), query.timezone(), asOf);
+        return matched.stream().map(this::detail).toList();
     }
 
     private AppUser owner(String username, boolean lock) {

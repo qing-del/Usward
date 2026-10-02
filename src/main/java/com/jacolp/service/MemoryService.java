@@ -126,6 +126,21 @@ public class MemoryService {
         long total = memories.count(owner.getId(), archived, pattern, category, tag);
         List<MemoryCard> cards = memories.page(owner.getId(), archived, pattern, category, tag,
                 size, ((long) page - 1) * size);
+        List<MemoryDtos.Summary> items = summaries(cards, owner);
+        List<MemoryDtos.TagCount> availableTags = memories.availableTags(
+                owner.getId(), archived, pattern, category).stream()
+                .map(row -> new MemoryDtos.TagCount(row.getTag(), row.getCount())).toList();
+        return new MemoryDtos.Page(items, total, page, size, (long) page * size < total,
+                asOf, availableTags);
+    }
+
+    @Transactional(readOnly = true)
+    public MemoryDtos.Summary latestOwnSummary(AppUser owner) {
+        List<MemoryCard> cards = memories.page(owner.getId(), false, null, null, null, 1, 0);
+        return cards.isEmpty() ? null : summaries(cards, owner).getFirst();
+    }
+
+    private List<MemoryDtos.Summary> summaries(List<MemoryCard> cards, AppUser owner) {
         Map<Long, List<String>> tagsByCard = new HashMap<>();
         if (!cards.isEmpty()) {
             for (MemoryTag row : memories.tagsForCards(cards.stream().map(MemoryCard::getId).toList())) {
@@ -134,16 +149,11 @@ public class MemoryService {
         }
         MemoryDtos.PublicOwner publicOwner = new MemoryDtos.PublicOwner(
                 owner.getId().toString(), owner.getNickname(), owner.getAvatarStyle());
-        List<MemoryDtos.Summary> items = cards.stream().map(card -> new MemoryDtos.Summary(
+        return cards.stream().map(card -> new MemoryDtos.Summary(
                 card.getId().toString(), card.getVersion().toString(), utc(card.getCreatedAt()),
                 utc(card.getUpdatedAt()), owner.getId().toString(), publicOwner,
                 card.getTitle(), card.getCategory(), tagsByCard.getOrDefault(card.getId(), List.of()),
                 card.getSourceType(), null)).toList();
-        List<MemoryDtos.TagCount> availableTags = memories.availableTags(
-                owner.getId(), archived, pattern, category).stream()
-                .map(row -> new MemoryDtos.TagCount(row.getTag(), row.getCount())).toList();
-        return new MemoryDtos.Page(items, total, page, size, (long) page * size < total,
-                asOf, availableTags);
     }
 
     private AppUser owner(String username) {

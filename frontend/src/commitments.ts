@@ -69,6 +69,26 @@ export function patchCommitment(id: string, write: CommitmentPatch): Promise<Com
   return request<CommitmentDetail>('PATCH', `/commitments/${encodeURIComponent(id)}`, write)
 }
 
+export function completeCommitment(id: string, expectedVersion: string,
+  result: string | null): Promise<CommitmentDetail> {
+  return request<CommitmentDetail>('POST', `/commitments/${encodeURIComponent(id)}/complete`,
+    { expectedVersion, result })
+}
+
+export function cancelCommitment(id: string, expectedVersion: string): Promise<CommitmentDetail> {
+  return request<CommitmentDetail>('POST', `/commitments/${encodeURIComponent(id)}/cancel`,
+    { expectedVersion })
+}
+
+export function reopenCommitment(id: string, expectedVersion: string): Promise<CommitmentDetail> {
+  return request<CommitmentDetail>('POST', `/commitments/${encodeURIComponent(id)}/reopen`,
+    { expectedVersion })
+}
+
+export function deleteCommitment(id: string, expectedVersion: string): Promise<void> {
+  return request<void>('DELETE', `/commitments/${encodeURIComponent(id)}`, { expectedVersion })
+}
+
 export function commitmentDueLabel(item: Pick<CommitmentSummary, 'dueKind' | 'dueDate' | 'dueTimezone' | 'dueAt'>,
   viewerTimezone: string): string {
   if (item.dueKind === 'NONE') return '未设截止时间'

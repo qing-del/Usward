@@ -121,7 +121,7 @@ describe('private commitments read', () => {
     await flushPromises()
     await wrapper.get('.commitment-open').trigger('click')
     await flushPromises()
-    await wrapper.get('.dialog-actions .primary').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '编辑承诺')!.trigger('click')
     await wrapper.get('#commitment-title').setValue('我的新标题')
     await wrapper.get('form').trigger('submit')
     await flushPromises()
@@ -134,6 +134,73 @@ describe('private commitments read', () => {
     const writes = fetchMock.mock.calls.filter(call => call[1]?.method === 'PATCH')
     expect(JSON.parse(writes[1]![1].body)).toMatchObject({ expectedVersion: '1', title: '我的新标题' })
     expect(JSON.parse(writes[1]![1].body)).not.toHaveProperty('sourceType')
+    wrapper.unmount()
+  })
+
+  it('completes a commitment with a result and refreshes the server counts', async () => {
+    let completed = false
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      if (path.endsWith('/commitments/1/complete')) {
+        completed = true
+        return Promise.resolve(json({ ...detail, version: '1', status: 'DONE',
+          result: '读完了，想继续聊聊' }))
+      }
+      if (path.endsWith('/commitments/1')) return Promise.resolve(json(detail))
+      return Promise.resolve(json({ items: completed ? [] : [summary], total: completed ? 0 : 1,
+        page: 1, size: 20, hasMore: false, asOf: '', statusCounts: {
+          OPEN: completed ? 0 : 1, DONE: completed ? 1 : 0, CANCELLED: 0,
+        } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountedPage()
+    await flushPromises()
+    await wrapper.get('.commitment-open').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '记为完成')!.trigger('click')
+    await wrapper.get('#commitment-result').setValue('读完了，想继续聊聊')
+    await wrapper.findAll('button').find(button => button.text() === '确认完成')!.trigger('click')
+    await flushPromises()
+    const call = fetchMock.mock.calls.find(entry => String(entry[0]).endsWith('/commitments/1/complete'))!
+    expect(JSON.parse(call[1].body)).toEqual({ expectedVersion: '0', result: '读完了，想继续聊聊' })
+    expect(wrapper.text()).toContain('完成记录')
+    expect(session.user?.stats.openCommitmentCount).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('does not retry a stale delete until the user reviews the new version', async () => {
+    let detailReads = 0
+    let deletions = 0
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      if (path.endsWith('/commitments/1') && init?.method === 'DELETE') {
+        deletions++
+        return Promise.resolve(deletions === 1
+          ? json({ code: 'VERSION_CONFLICT', message: '版本已变化' }, 409)
+          : new Response(null, { status: 204 }))
+      }
+      if (path.endsWith('/commitments/1')) {
+        detailReads++
+        return Promise.resolve(json({ ...detail, version: detailReads === 1 ? '0' : '1' }))
+      }
+      return Promise.resolve(json({ items: [summary], total: 1, page: 1, size: 20,
+        hasMore: false, asOf: '', statusCounts: { OPEN: 1, DONE: 0, CANCELLED: 0 } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountedPage()
+    await flushPromises()
+    await wrapper.get('.commitment-open').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '删除')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '确认删除')!.trigger('click')
+    await flushPromises()
+    expect(deletions).toBe(1)
+    expect(wrapper.text()).toContain('最新版本')
+    await wrapper.findAll('button').find(button => button.text() === '使用最新版本后核对')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '确认删除')!.trigger('click')
+    await flushPromises()
+    const writes = fetchMock.mock.calls.filter(entry => entry[1]?.method === 'DELETE')
+    expect(JSON.parse(writes[1]![1].body)).toEqual({ expectedVersion: '1' })
     wrapper.unmount()
   })
 })

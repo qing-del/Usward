@@ -4,8 +4,9 @@ import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import { ApiError, errorMessage } from '../api'
-import { commitmentDueLabel, commitmentSourceLink, createCommitment, getCommitment,
-  listCommitments, patchCommitment, statusLabels } from '../commitments'
+import { cancelCommitment, commitmentDueLabel, commitmentSourceLink, completeCommitment,
+  createCommitment, deleteCommitment, getCommitment, listCommitments, patchCommitment,
+  reopenCommitment, statusLabels } from '../commitments'
 import type { CommitmentDetail, CommitmentSort, CommitmentStatusFilter,
   CommitmentSummary } from '../commitments'
 import { commitmentDraftFromDetail, createCommitmentValues, emptyCommitmentDraft,
@@ -42,12 +43,22 @@ const removeSource = ref(false)
 const formPending = ref(false)
 const formError = ref('')
 const latest = ref<CommitmentDetail | null>(null)
+type ActionMode = 'complete' | 'cancel' | 'reopen' | 'delete'
+const actionMode = ref<ActionMode | null>(null)
+const actionVersion = ref('')
+const actionPending = ref(false)
+const actionError = ref('')
+const actionLatest = ref<CommitmentDetail | null>(null)
+const resultDraft = ref('')
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
 const dueCandidates = computed(() => {
   if (!draft.dueLocal) return []
   try { return localCandidates(draft.dueLocal, timezone.value) }
   catch { return [] }
 })
+const actionAllowed = computed(() => !detail.value || !actionMode.value
+  || actionMode.value === 'delete'
+  || (actionMode.value === 'reopen' ? detail.value.status !== 'OPEN' : detail.value.status === 'OPEN'))
 let controller: AbortController | null = null
 let sequence = 0
 
@@ -98,6 +109,7 @@ async function openDetail(id: string) {
   detail.value = null
   detailError.value = ''
   detailLoading.value = true
+  actionMode.value = null
   try { detail.value = await getCommitment(id) }
   catch (cause) {
     detailError.value = cause instanceof ApiError && cause.status === 404
@@ -105,7 +117,7 @@ async function openDetail(id: string) {
   } finally { detailLoading.value = false }
 }
 
-function closeDetail() { detailOpen.value = false; detail.value = null }
+function closeDetail() { detailOpen.value = false; detail.value = null; actionMode.value = null }
 function dueLabel(item: CommitmentSummary | CommitmentDetail) {
   return commitmentDueLabel(item, timezone.value)
 }
@@ -174,6 +186,58 @@ function adoptLatestVersion() {
   latest.value = null
   formError.value = '请核对当前输入，然后再次保存。'
 }
+
+function beginAction(mode: ActionMode) {
+  if (!detail.value) return
+  actionMode.value = mode
+  actionVersion.value = detail.value.version
+  actionError.value = ''
+  actionLatest.value = null
+  resultDraft.value = ''
+}
+
+async function performAction() {
+  if (!detail.value || !actionMode.value || actionPending.value || !actionAllowed.value) return
+  actionError.value = ''
+  if ([...resultDraft.value.trim()].length > 5000) {
+    actionError.value = '完成记录不能超过 5000 个字。'
+    return
+  }
+  actionPending.value = true
+  try {
+    const id = detail.value.id
+    const version = actionVersion.value
+    if (actionMode.value === 'delete') {
+      await deleteCommitment(id, version)
+      closeDetail()
+    } else {
+      const saved = actionMode.value === 'complete'
+        ? await completeCommitment(id, version, resultDraft.value.trim() || null)
+        : actionMode.value === 'cancel'
+          ? await cancelCommitment(id, version)
+          : await reopenCommitment(id, version)
+      detail.value = saved
+      actionMode.value = null
+    }
+    actionLatest.value = null
+    await load(1)
+  } catch (cause) {
+    actionError.value = errorMessage(cause)
+    if (cause instanceof ApiError && cause.status === 409 && detail.value) {
+      try { actionLatest.value = await getCommitment(detail.value.id) }
+      catch { /* Keep the completion draft and error visible. */ }
+    }
+  } finally { actionPending.value = false }
+}
+
+function adoptLatestActionVersion() {
+  if (!actionLatest.value) return
+  detail.value = actionLatest.value
+  actionVersion.value = actionLatest.value.version
+  actionLatest.value = null
+  actionError.value = actionAllowed.value
+    ? '请核对当前操作，然后再次提交。' : '最新状态不支持此操作，请返回详情。'
+}
 </script>
 
 <template>
@@ -209,7 +273,8 @@ function adoptLatestVersion() {
     <div v-if="hasMore && !loading" class="more-row"><button class="btn secondary" :disabled="loadingMore"
       @click="load(page + 1)">{{ loadingMore ? '正在加载…' : '再看 20 条承诺' }}</button></div>
 
-    <BaseDialog :open="detailOpen" :title="detail?.title || '承诺详情'" :wide="true" @close="closeDetail">
+    <BaseDialog :open="detailOpen" :title="detail?.title || '承诺详情'" :wide="true"
+      :busy="actionPending" @close="closeDetail">
       <div v-if="detailLoading" class="loading-state" role="status">正在读取承诺…</div>
       <template v-else-if="detail"><div class="detail-meta"><span class="badge green">仅自己可见</span>
         <span class="badge gray">{{ statusLabels[detail.status] }}</span>
@@ -222,7 +287,26 @@ function adoptLatestVersion() {
         <p v-if="detail.sourceType" class="detail-line"><strong>来源</strong>
           <RouterLink v-if="commitmentSourceLink(detail)" class="text-button" :to="commitmentSourceLink(detail)!">查看来源 ↗</RouterLink>
           <span v-else>来源不可用</span></p>
-        <div class="dialog-actions"><button class="btn primary" @click="openEdit">编辑承诺</button></div>
+        <div v-if="actionMode" class="inline-note peach mt-16">
+          <p v-if="actionMode === 'complete'">记为完成后，可以留下自己的完成记录。完成不代表所有感受已经解决。</p>
+          <p v-else-if="actionMode === 'cancel'">确定取消这条承诺？之后仍可重新打开。</p>
+          <p v-else-if="actionMode === 'reopen'">重新打开会清空原完成记录。确定继续？</p>
+          <p v-else>删除后，这条承诺将无法从页面恢复。确定删除？</p>
+          <div v-if="actionMode === 'complete'" class="field mt-16"><label for="commitment-result">完成记录 <small>可选</small></label>
+            <textarea id="commitment-result" v-model="resultDraft" maxlength="5000" rows="3" /></div>
+          <p v-if="actionError" class="form-error mt-16" role="alert">{{ actionError }}</p>
+          <div v-if="actionLatest" class="inline-note mt-16"><p>最新版本：<strong>{{ actionLatest.title }}</strong> · {{ statusLabels[actionLatest.status] }} · {{ dueLabel(actionLatest) }}</p>
+            <p v-if="actionLatest.result" class="detail-body">完成记录：{{ actionLatest.result }}</p>
+            <button class="text-button" @click="adoptLatestActionVersion">使用最新版本后核对</button></div>
+          <div class="dialog-actions mt-16"><button class="btn secondary" :disabled="actionPending" @click="actionMode = null">返回详情</button>
+            <button class="btn" :class="actionMode === 'delete' ? 'danger' : 'primary'"
+              :disabled="actionPending || !actionAllowed || !!actionLatest" @click="performAction">
+              {{ actionPending ? '正在提交…' : actionMode === 'complete' ? '确认完成' : actionMode === 'cancel' ? '确认取消' : actionMode === 'reopen' ? '确认重新打开' : '确认删除' }}</button></div></div>
+        <div v-else class="dialog-actions"><button class="text-button danger" @click="beginAction('delete')">删除</button>
+          <button v-if="detail.status === 'OPEN'" class="btn secondary" @click="beginAction('cancel')">取消承诺</button>
+          <button v-if="detail.status !== 'OPEN'" class="btn secondary" @click="beginAction('reopen')">重新打开</button>
+          <button class="btn soft" @click="openEdit">编辑承诺</button>
+          <button v-if="detail.status === 'OPEN'" class="btn primary" @click="beginAction('complete')">记为完成</button></div>
       </template>
       <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
     </BaseDialog>

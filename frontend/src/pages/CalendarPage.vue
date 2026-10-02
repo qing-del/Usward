@@ -338,6 +338,8 @@ async function removeEvent() {
           <button class="btn danger mt-16" :disabled="deletePending" @click="removeEvent">{{ deletePending ? '正在删除…' : '确认删除' }}</button>
           <button class="text-button" @click="confirmDelete = false">再想一下</button></div>
         <div v-else class="dialog-actions"><button class="text-button danger" @click="confirmDelete = true">删除安排</button>
+          <RouterLink class="btn soft" :to="`/commitments?new=1&sourceType=CALENDAR_EVENT&sourceId=${encodeURIComponent(detail.id)}`">
+            写下我的下一步</RouterLink>
           <button class="btn primary" @click="openEdit">编辑安排</button></div>
       </template>
       <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>

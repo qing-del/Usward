@@ -1,4 +1,5 @@
 import { query, request } from './api'
+import type { CommitmentPatch, CommitmentWrite } from './commitmentWrite'
 
 export type CommitmentStatus = 'OPEN' | 'DONE' | 'CANCELLED'
 export type CommitmentStatusFilter = CommitmentStatus | 'ALL'
@@ -58,6 +59,14 @@ export function listCommitments(filter: { status: CommitmentStatusFilter; sort: 
 
 export function getCommitment(id: string): Promise<CommitmentDetail> {
   return request<CommitmentDetail>('GET', `/commitments/${encodeURIComponent(id)}`)
+}
+
+export function createCommitment(write: CommitmentWrite): Promise<CommitmentDetail> {
+  return request<CommitmentDetail>('POST', '/commitments', write)
+}
+
+export function patchCommitment(id: string, write: CommitmentPatch): Promise<CommitmentDetail> {
+  return request<CommitmentDetail>('PATCH', `/commitments/${encodeURIComponent(id)}`, write)
 }
 
 export function commitmentDueLabel(item: Pick<CommitmentSummary, 'dueKind' | 'dueDate' | 'dueTimezone' | 'dueAt'>,

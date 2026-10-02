@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import { ApiError, errorMessage } from '../api'
-import { commitmentDueLabel, commitmentSourceLink, getCommitment, listCommitments,
-  statusLabels } from '../commitments'
+import { commitmentDueLabel, commitmentSourceLink, createCommitment, getCommitment,
+  listCommitments, patchCommitment, statusLabels } from '../commitments'
 import type { CommitmentDetail, CommitmentSort, CommitmentStatusFilter,
   CommitmentSummary } from '../commitments'
+import { commitmentDraftFromDetail, createCommitmentValues, emptyCommitmentDraft,
+  patchCommitmentValues } from '../commitmentWrite'
+import type { CommitmentDraft, CommitmentPatch, CommitmentSource,
+  CommitmentWrite } from '../commitmentWrite'
 import { session } from '../session'
+import { localCandidates } from '../time'
 
 const route = useRoute()
 const allowedStatuses: CommitmentStatusFilter[] = ['OPEN', 'DONE', 'CANCELLED', 'ALL']
@@ -27,7 +32,22 @@ const detailOpen = ref(false)
 const detail = ref<CommitmentDetail | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
+const formOpen = ref(false)
+const editingId = ref<string | null>(null)
+const editVersion = ref('')
+const originalDraft = ref<CommitmentDraft | null>(null)
+const draft = reactive<CommitmentDraft>(emptyCommitmentDraft(session.user?.timezone ?? 'Asia/Shanghai'))
+const source = ref<CommitmentSource | null>(null)
+const removeSource = ref(false)
+const formPending = ref(false)
+const formError = ref('')
+const latest = ref<CommitmentDetail | null>(null)
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
+const dueCandidates = computed(() => {
+  if (!draft.dueLocal) return []
+  try { return localCandidates(draft.dueLocal, timezone.value) }
+  catch { return [] }
+})
 let controller: AbortController | null = null
 let sequence = 0
 
@@ -46,6 +66,7 @@ async function load(targetPage: number) {
     if (current !== sequence) return
     items.value = targetPage === 1 ? result.items : [...items.value, ...result.items]
     counts.value = result.statusCounts
+    if (session.user) session.user.stats.openCommitmentCount = result.statusCounts.OPEN
     total.value = result.total
     page.value = result.page
     hasMore.value = result.hasMore
@@ -60,7 +81,13 @@ async function load(targetPage: number) {
 watch([status, sort], () => load(1))
 onMounted(() => {
   load(1)
-  if (typeof route.query.commitment === 'string' && /^[1-9]\d*$/.test(route.query.commitment)) {
+  if (route.query.new === '1') {
+    const type = route.query.sourceType
+    const id = route.query.sourceId
+    const linked = (type === 'MEMORY_CARD' || type === 'CALENDAR_EVENT')
+      && typeof id === 'string' && /^[1-9]\d*$/.test(id)
+    openCreate(linked ? { sourceType: type, sourceId: id } : null)
+  } else if (typeof route.query.commitment === 'string' && /^[1-9]\d*$/.test(route.query.commitment)) {
     openDetail(route.query.commitment)
   }
 })
@@ -82,13 +109,79 @@ function closeDetail() { detailOpen.value = false; detail.value = null }
 function dueLabel(item: CommitmentSummary | CommitmentDetail) {
   return commitmentDueLabel(item, timezone.value)
 }
+
+function openCreate(linkedSource: CommitmentSource | null = null) {
+  Object.assign(draft, emptyCommitmentDraft(timezone.value))
+  source.value = linkedSource
+  removeSource.value = false
+  editingId.value = null
+  originalDraft.value = null
+  editVersion.value = ''
+  formError.value = ''
+  latest.value = null
+  formOpen.value = true
+}
+
+function openEdit() {
+  if (!detail.value) return
+  Object.assign(draft, commitmentDraftFromDetail(detail.value, timezone.value))
+  originalDraft.value = { ...draft }
+  editingId.value = detail.value.id
+  editVersion.value = detail.value.version
+  source.value = null
+  removeSource.value = false
+  formError.value = ''
+  latest.value = null
+  detailOpen.value = false
+  formOpen.value = true
+}
+
+async function saveCommitment() {
+  if (formPending.value) return
+  formError.value = ''
+  let createWrite: CommitmentWrite | null = null
+  let patchWrite: CommitmentPatch | null = null
+  try {
+    if (editingId.value && originalDraft.value) {
+      patchWrite = patchCommitmentValues(draft, originalDraft.value, timezone.value,
+        editVersion.value, removeSource.value)
+      if (!patchWrite) { formError.value = '当前没有需要保存的修改。'; return }
+    } else createWrite = createCommitmentValues(draft, timezone.value, source.value)
+  } catch (cause) { formError.value = cause instanceof Error ? cause.message : '承诺内容无效。'; return }
+  formPending.value = true
+  try {
+    const saved = editingId.value && patchWrite
+      ? await patchCommitment(editingId.value, patchWrite)
+      : await createCommitment(createWrite!)
+    detail.value = saved
+    detailError.value = ''
+    latest.value = null
+    formOpen.value = false
+    detailOpen.value = true
+    await load(1)
+  } catch (cause) {
+    formError.value = errorMessage(cause)
+    if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && editingId.value) {
+      try { latest.value = await getCommitment(editingId.value) }
+      catch { /* Keep the user's draft. */ }
+    }
+  } finally { formPending.value = false }
+}
+
+function adoptLatestVersion() {
+  if (!latest.value) return
+  editVersion.value = latest.value.version
+  latest.value = null
+  formError.value = '请核对当前输入，然后再次保存。'
+}
 </script>
 
 <template>
   <AppShell>
     <div class="page-heading"><div><span class="eyebrow">A PROMISE TO KEEP</span>
       <h1 class="serif">答应的事，慢慢做到。</h1>
-      <p class="subtitle">只写下自己的下一步，让心意落在日常里。</p></div></div>
+      <p class="subtitle">只写下自己的下一步，让心意落在日常里。</p></div>
+      <button class="btn primary" @click="openCreate()">＋ 写下我的下一步</button></div>
     <div class="commitment-intro"><span class="commitment-intro-mark">✿</span>
       <p><strong>下一步，是我愿意做的事。</strong><br /><small>现在的承诺仅自己可见；完成记录不代表所有感受已经解决。</small></p></div>
     <div class="toolbar commitment-toolbar"><div class="tabs" aria-label="承诺状态">
@@ -129,8 +222,52 @@ function dueLabel(item: CommitmentSummary | CommitmentDetail) {
         <p v-if="detail.sourceType" class="detail-line"><strong>来源</strong>
           <RouterLink v-if="commitmentSourceLink(detail)" class="text-button" :to="commitmentSourceLink(detail)!">查看来源 ↗</RouterLink>
           <span v-else>来源不可用</span></p>
+        <div class="dialog-actions"><button class="btn primary" @click="openEdit">编辑承诺</button></div>
       </template>
       <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
+    </BaseDialog>
+    <BaseDialog :open="formOpen" :title="editingId ? '编辑承诺' : '写下我的下一步'"
+      :wide="true" :busy="formPending" @close="formOpen = false">
+      <form class="form-stack" @submit.prevent="saveCommitment">
+        <div class="field"><label for="commitment-title">标题</label>
+          <input id="commitment-title" v-model="draft.title" maxlength="100" required
+            placeholder="写下自己愿意做的一件事" /></div>
+        <div class="field"><label for="commitment-body">说明 <small>可选</small></label>
+          <textarea id="commitment-body" v-model="draft.body" maxlength="5000" rows="4" /></div>
+        <div class="field"><label for="commitment-next">下一步 <small>可选</small></label>
+          <textarea id="commitment-next" v-model="draft.nextAction" maxlength="5000" rows="2" /></div>
+        <div class="field"><label for="commitment-due-kind">截止方式</label>
+          <select id="commitment-due-kind" v-model="draft.dueKind"><option value="NONE">不设截止</option>
+            <option value="DATE">只设日期</option><option value="INSTANT">精确时间</option></select></div>
+        <div v-if="draft.dueKind === 'DATE'" class="form-grid">
+          <div class="field"><label for="commitment-due-date">截止日期</label>
+            <input id="commitment-due-date" v-model="draft.dueDate" type="date" required /></div>
+          <div class="field"><label for="commitment-due-timezone">日期所属时区</label>
+            <input id="commitment-due-timezone" v-model="draft.dueTimezone" maxlength="64" required
+              placeholder="Asia/Shanghai" /></div></div>
+        <div v-if="draft.dueKind === 'INSTANT'" class="field">
+          <label for="commitment-due-local">精确截止时间（{{ timezone }}）</label>
+          <input id="commitment-due-local" v-model="draft.dueLocal" type="datetime-local" required
+            @change="draft.dueOffset = ''" />
+          <p v-if="draft.dueLocal && !dueCandidates.length" class="field-help form-error">这个当地时间不存在，请另选时间。</p>
+          <div v-if="dueCandidates.length > 1" class="field"><label for="commitment-due-offset">选择 UTC 偏移</label>
+            <select id="commitment-due-offset" v-model="draft.dueOffset" required><option value="">请选择</option>
+              <option v-for="candidate in dueCandidates" :key="candidate.instant" :value="candidate.offset">
+                {{ candidate.offset }} · {{ candidate.instant }}</option></select></div></div>
+        <div v-if="source && !removeSource" class="inline-note"><p>关联来源：{{ source.sourceType === 'MEMORY_CARD' ? '记忆卡片' : '个人安排' }} #{{ source.sourceId }}</p>
+          <button type="button" class="text-button" @click="removeSource = true; source = null">不关联来源</button></div>
+        <div v-else-if="editingId && detail?.sourceType && !removeSource" class="inline-note"><p>来源{{ detail.sourceAvailable ? '已关联' : '不可用' }}，编辑其它内容时会保留。</p>
+          <button type="button" class="text-button" @click="removeSource = true">移除来源关联</button></div>
+        <div class="inline-note">这条承诺目前仅自己可见。截止时间不会自动创建提醒。</div>
+        <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
+        <div v-if="latest" class="inline-note peach"><p>承诺在其他位置发生了变化。当前输入已保留。最新内容：</p>
+          <p><strong>{{ latest.title }}</strong> · {{ dueLabel(latest) }}</p>
+          <p v-if="latest.body" class="detail-body">{{ latest.body }}</p>
+          <p v-if="latest.nextAction" class="detail-body">下一步：{{ latest.nextAction }}</p>
+          <button type="button" class="text-button" @click="adoptLatestVersion">使用最新版本后核对并重试</button></div>
+        <div class="dialog-actions"><button type="button" class="btn secondary" @click="formOpen = false">取消</button>
+          <button type="submit" class="btn primary" :disabled="formPending">{{ formPending ? '正在保存…' : '保存承诺' }}</button></div>
+      </form>
     </BaseDialog>
   </AppShell>
 </template>

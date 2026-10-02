@@ -268,6 +268,8 @@ function readableDate(value: string): string {
           <div v-else class="dialog-actions"><button class="text-button danger" @click="confirmDelete = true">删除</button>
             <button class="btn secondary" :disabled="operationPending" @click="toggleArchived">
               {{ detail.archived ? '恢复到记忆' : '归档' }}</button>
+            <RouterLink class="btn soft" :to="`/commitments?new=1&sourceType=MEMORY_CARD&sourceId=${encodeURIComponent(detail.id)}`">
+              写下我的下一步</RouterLink>
             <button class="btn primary" @click="editMemory">编辑卡片</button></div>
         </template>
         <p v-if="detailError" class="form-error mt-16" role="alert">{{ detailError }}</p>

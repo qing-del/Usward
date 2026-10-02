@@ -19,15 +19,15 @@ const summary = { id: '1', version: '0', createdAt: '2026-10-01T00:00:00Z',
   sharedConnectionId: null }
 const detail = { ...summary, body: '只在详情读取的说明', result: null,
   sourceType: 'MEMORY_CARD', sourceId: '9', sourceAvailable: false, myReminder: null }
-const json = (value: unknown) => new Response(JSON.stringify(value),
-  { headers: { 'Content-Type': 'application/json' } })
+const json = (value: unknown, status = 200) => new Response(JSON.stringify(value),
+  { status, headers: { 'Content-Type': 'application/json' } })
 
-async function mountedPage() {
+async function mountedPage(path = '/commitments') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/commitments', component: CommitmentsPage },
     { path: '/memories', component: CommitmentsPage },
   ] })
-  await router.push('/commitments')
+  await router.push(path)
   await router.isReady()
   return mount(CommitmentsPage, { global: { plugins: [router], stubs: {
     AppShell: { template: '<div><slot /></div>' },
@@ -76,5 +76,64 @@ describe('private commitments read', () => {
     expect(result.total).toBe(8)
     expect(result.statusCounts.DONE).toBe(8)
     expect(fetchMock.mock.calls[0][0]).toContain('status=DONE&sort=UPDATED_DESC')
+  })
+
+  it('creates a private commitment with its memory source from the detail deep link', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      if (path.endsWith('/commitments') && init?.method === 'POST') return Promise.resolve(json(detail, 201))
+      return Promise.resolve(json({ items: [], total: 0, page: 1, size: 20,
+        hasMore: false, asOf: '', statusCounts: { OPEN: 0, DONE: 0, CANCELLED: 0 } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountedPage('/commitments?new=1&sourceType=MEMORY_CARD&sourceId=9')
+    await flushPromises()
+    await wrapper.get('#commitment-title').setValue('新的下一步')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const post = fetchMock.mock.calls.find(call => call[1]?.method === 'POST')!
+    expect(JSON.parse(post[1].body)).toMatchObject({ title: '新的下一步',
+      dueKind: 'NONE', sourceType: 'MEMORY_CARD', sourceId: '9' })
+    wrapper.unmount()
+  })
+
+  it('preserves an edited draft after version conflict until the user reviews the latest detail', async () => {
+    let detailReads = 0
+    let patches = 0
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'token' }))
+      if (path.endsWith('/commitments/1') && init?.method === 'PATCH') {
+        patches++
+        return Promise.resolve(patches === 1
+          ? json({ code: 'VERSION_CONFLICT', message: '承诺版本已变化' }, 409)
+          : json({ ...detail, title: '我的新标题', version: '2' }))
+      }
+      if (path.endsWith('/commitments/1')) {
+        detailReads++
+        return Promise.resolve(json({ ...detail, version: detailReads === 1 ? '0' : '1',
+          title: detailReads === 1 ? '读书' : '另一处修改的标题' }))
+      }
+      return Promise.resolve(json({ items: [summary], total: 1, page: 1, size: 20,
+        hasMore: false, asOf: '', statusCounts: { OPEN: 1, DONE: 0, CANCELLED: 0 } }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = await mountedPage()
+    await flushPromises()
+    await wrapper.get('.commitment-open').trigger('click')
+    await flushPromises()
+    await wrapper.get('.dialog-actions .primary').trigger('click')
+    await wrapper.get('#commitment-title').setValue('我的新标题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect((wrapper.get('#commitment-title').element as HTMLInputElement).value).toBe('我的新标题')
+    expect(wrapper.text()).toContain('另一处修改的标题')
+    expect(patches).toBe(1)
+    await wrapper.get('.inline-note.peach .text-button').trigger('click')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const writes = fetchMock.mock.calls.filter(call => call[1]?.method === 'PATCH')
+    expect(JSON.parse(writes[1]![1].body)).toMatchObject({ expectedVersion: '1', title: '我的新标题' })
+    expect(JSON.parse(writes[1]![1].body)).not.toHaveProperty('sourceType')
+    wrapper.unmount()
   })
 })

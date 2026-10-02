@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写和私人日历范围查询接口。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并接入这些接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询，以及私密承诺的创建和详情接口。正式 Vue 前端位于 [`frontend/`](../frontend/README.md)，尚未接入承诺；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
@@ -35,3 +35,5 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 个人事件使用 `POST /events` 创建、`GET /events/{id}` 读取、`PATCH /events/{id}` 编辑、`DELETE /events/{id}` 删除。写入仅接受自己的事件字段，带时间形式为 `{"title":"阅读","allDay":false,"startsAt":"2026-09-29T09:00:00Z","endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai","availability":"BUSY"}`；全天形式改用 `startDate`、`endDateExclusive`。PATCH 修改时间或时区时须提交完整的一组时间字段；其它字段可单独修改。PATCH/DELETE 都要传字符串 `expectedVersion`，旧版本返回 409。`offlineConfirmed=true` 且不提供时间时由服务端记录当前时刻；再次提交 true 保留已有时间，false 清空。
 
 `GET /calendar` 必须提供 UTC `Z` 格式的 `from`、`to` 和 IANA `timezone`。起止值应为查询时区中的当地日界，跨度为 1–93 个日历日，区间左闭右开；例如 `GET /calendar?from=2026-09-28T16:00:00Z&to=2026-09-29T16:00:00Z&timezone=Asia/Shanghai` 查询上海时区的 9 月 29 日。可选 `scope=ALL/MINE/SHARED` 和 `includeCancelled=false/true`；目前 ALL/MINE 仅返回本人事件，SHARED 返回空集合，个人事件无取消记录。结果按事件实际开始边界与 ID 升序排列。事件提醒、双人忙闲与共同事件尚未接入。
+
+私密承诺目前可通过 `POST /commitments` 创建、`GET /commitments/{id}` 查看。创建至少提交标题，可选说明、下一步和来源；截止使用 `dueKind=NONE/DATE/INSTANT`，日期截止须同时提交 `dueDate` 与 `dueTimezone`，精确截止须提交 UTC `Z` 格式的 `dueAt`。来源只接受当前可读取的本人卡片或个人事件，`sourceId` 为十进制字符串；删去来源后承诺保留，详情的 `sourceAvailable` 变为 false。承诺的编辑、状态操作和列表将在本轮后续提交补齐。

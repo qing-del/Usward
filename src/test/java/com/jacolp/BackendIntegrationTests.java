@@ -51,6 +51,8 @@ class BackendIntegrationTests {
     void freshAccounts() {
         jdbc.update("DELETE FROM notification_delivery");
         jdbc.update("DELETE FROM notification");
+        jdbc.update("DELETE FROM reminder");
+        jdbc.update("DELETE FROM commitment");
         jdbc.update("DELETE FROM calendar_event");
         jdbc.update("DELETE FROM pair_connection");
         jdbc.update("DELETE FROM memory_tag");
@@ -60,6 +62,69 @@ class BackendIntegrationTests {
         jdbc.update("DELETE FROM app_user");
         accounts.createUser("alice", "Alice", "Asia/Shanghai", "A-user-test-password-21");
         accounts.createUser("bob", "Bob", "Asia/Shanghai", "B-user-test-password-21");
+    }
+
+    @Test
+    void privateCommitmentCreationValidatesDeadlinesSourcesAndOwnership() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        assertEquals(403, alice.call("POST", "/commitments", "{\"title\":\"私密\"}",
+                null).statusCode());
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"private source\"}").body());
+        String cardId = card.path("id").asText();
+        JsonNode created = JSON.readTree(alice.write("POST", "/commitments", """
+                {"title":"为自己做一件事","body":"仅自己可读","nextAction":"先记录",
+                 "dueKind":"DATE","dueDate":"2026-03-08","dueTimezone":"America/New_York",
+                 "sourceType":"MEMORY_CARD","sourceId":"%s"}
+                """.formatted(cardId)).body());
+        String id = created.path("id").asText();
+        assertTrue(created.path("id").isTextual());
+        assertEquals("0", created.path("version").asText());
+        assertEquals("OPEN", created.path("status").asText());
+        assertTrue(created.path("sharedConnectionId").isNull());
+        assertEquals("2026-03-09T04:00:00Z", created.path("deadlineAt").asText());
+        assertTrue(created.path("sourceAvailable").asBoolean());
+        assertTrue(created.path("myReminder").isNull());
+        assertEquals(200, alice.call("GET", "/commitments/" + id, null, null).statusCode());
+        assertEquals(404, bob.call("GET", "/commitments/" + id, null, null).statusCode());
+
+        assertEquals(400, alice.write("POST", "/commitments",
+                "{\"title\":\"x\",\"dueKind\":\"DATE\",\"dueDate\":\"2026-03-08\"}"
+        ).statusCode());
+        assertEquals(400, alice.write("POST", "/commitments",
+                "{\"title\":\"x\",\"dueKind\":\"INSTANT\",\"dueAt\":\"2026-03-08T10:00:00+08:00\"}"
+        ).statusCode());
+        assertEquals(400, alice.write("POST", "/commitments",
+                "{\"title\":\"x\",\"ownerId\":\"999\"}").statusCode());
+        assertEquals(400, alice.write("POST", "/commitments",
+                "{\"title\":\"x\",\"sourceType\":\"MEMORY_CARD\"}").statusCode());
+        assertEquals(404, alice.write("POST", "/commitments",
+                "{\"title\":\"x\",\"sourceType\":\"EXPRESSION\",\"sourceId\":\"1\"}"
+        ).statusCode());
+        assertEquals(404, bob.write("POST", "/commitments",
+                "{\"title\":\"x\",\"sourceType\":\"MEMORY_CARD\",\"sourceId\":\""
+                        + cardId + "\"}").statusCode());
+        assertEquals(400, alice.call("GET", "/commitments/01", null, null).statusCode());
+
+        assertEquals(204, alice.write("DELETE", "/memories/" + cardId,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertFalse(JSON.readTree(alice.call("GET", "/commitments/" + id, null, null).body())
+                .path("sourceAvailable").asBoolean());
+
+        JsonNode event = JSON.readTree(alice.write("POST", "/events", """
+                {"title":"私密安排","allDay":false,"startsAt":"2026-10-03T09:00:00Z",
+                 "endsAt":"2026-10-03T10:00:00Z","eventTimezone":"Asia/Shanghai",
+                 "availability":"BUSY"}
+                """).body());
+        JsonNode fromEvent = JSON.readTree(alice.write("POST", "/commitments", """
+                {"title":"来自安排","sourceType":"CALENDAR_EVENT","sourceId":"%s"}
+                """.formatted(event.path("id").asText())).body());
+        assertTrue(fromEvent.path("sourceAvailable").asBoolean());
+        assertEquals("NONE", fromEvent.path("dueKind").asText());
+        assertTrue(fromEvent.path("deadlineAt").isNull());
     }
 
     @Test

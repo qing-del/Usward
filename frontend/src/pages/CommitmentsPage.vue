@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import { ApiError, errorMessage } from '../api'
@@ -17,6 +17,7 @@ import { session } from '../session'
 import { localCandidates } from '../time'
 
 const route = useRoute()
+const router = useRouter()
 const allowedStatuses: CommitmentStatusFilter[] = ['OPEN', 'DONE', 'CANCELLED', 'ALL']
 const status = ref<CommitmentStatusFilter>(allowedStatuses.includes(route.query.status as CommitmentStatusFilter)
   ? route.query.status as CommitmentStatusFilter : 'OPEN')
@@ -170,6 +171,7 @@ async function saveCommitment() {
     latest.value = null
     formOpen.value = false
     detailOpen.value = true
+    if (!editingId.value) await router.replace({ path: '/commitments', query: { commitment: saved.id } })
     await load(1)
   } catch (cause) {
     formError.value = errorMessage(cause)

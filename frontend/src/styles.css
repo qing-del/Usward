@@ -288,6 +288,16 @@ small { font-size: 12px; }
 .recent-memory-link p { color: #8d907e; font-size: 12px; }
 .recent-memory-link .text-button { align-self: end; font-size: 12px; }
 .today-note { color: #899389; font-size: 11px; text-align: center; padding: 24px 10px; }
+.today-more { margin-top: 13px; font-size: 11px; }
+.today-commitments { display: grid; gap: 9px; }
+.today-commitment { display: grid; justify-items: start; gap: 5px; padding: 12px;
+  border-left: 4px solid #d6b09c; border-radius: 9px; background: #fbf2ec; }
+.today-commitment:hover { background: #f7e9df; }
+.today-commitment strong { overflow-wrap: anywhere; }
+.today-commitment > small { color: #917867; }
+.today-commitment .commitment-next { margin-top: 5px; font-size: 12px; }
+.today-featured { margin-top: 20px; min-height: 0; }
+.today-featured .recent-memory-link { min-height: 150px; }
 
 @media (max-width: 980px) {
   .site-layout { grid-template-columns: 208px minmax(0, 1fr); }

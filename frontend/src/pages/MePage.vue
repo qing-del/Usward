@@ -144,6 +144,9 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
+        <RouterLink to="/commitments" class="card account-link"><span class="section-heading"><strong>我的承诺</strong>
+          <span class="badge">{{ session.user.stats.openCommitmentCount }} 条进行中</span></span>
+          <span class="muted">看看自己愿意做的下一步　↗</span></RouterLink>
         <RouterLink to="/memories?archived=1" class="card account-link"><span class="section-heading"><strong>已归档记忆</strong>
           <span class="badge">{{ session.user.stats.archivedMemoryCount }} 张</span></span>
           <span class="muted">翻看自己收好的卡片　↗</span></RouterLink>

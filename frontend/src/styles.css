@@ -198,6 +198,28 @@ small { font-size: 12px; }
 .detail-line { display: flex; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; font-size: 12px; }
 .detail-line strong { flex: none; min-width: 67px; color: #6d766d; }
 
+.commitment-intro { display: flex; align-items: center; gap: 14px; border: 1px solid #e7e6d8;
+  border-radius: 15px; background: #f4f2e8; padding: 15px 19px; margin-bottom: 20px; }
+.commitment-intro-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px;
+  flex: none; background: #e7ecdc; color: var(--green); font-size: 25px; }
+.commitment-intro small { color: var(--muted); }
+.commitment-toolbar { justify-content: space-between; }
+.commitment-toolbar .tab span { margin-left: 3px; opacity: .7; }
+.commitment-sort { width: min(100%, 235px); }
+.commitment-list { display: grid; gap: 12px; }
+.commitment-card { padding: 0; overflow: hidden; }
+.commitment-open { width: 100%; display: grid; justify-items: start; gap: 9px; padding: 20px;
+  text-align: left; }
+.commitment-open:hover { background: #f9faf5; }
+.commitment-open > strong { font-size: 19px; overflow-wrap: anywhere; }
+.commitment-card-top { display: flex; gap: 7px; flex-wrap: wrap; }
+.commitment-due { color: #718071; font-size: 12px; }
+.commitment-due.overdue { color: #a76553; }
+.commitment-due em { font-style: normal; font-weight: 700; }
+.commitment-next { display: grid; gap: 2px; border-left: 3px solid #a9bd9e; padding-left: 10px;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.commitment-next small { color: var(--muted); }
+
 .calendar-layout { display: grid; grid-template-columns: minmax(0, 1fr) 255px; gap: 20px; align-items: start; }
 .calendar-main { min-width: 0; }
 .calendar-toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }

@@ -128,6 +128,118 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void privateCommitmentMutationsEnforceVersionsAndCleanRelatedRows() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        JsonNode created = JSON.readTree(alice.write("POST", "/commitments",
+                "{\"title\":\"original\",\"dueKind\":\"DATE\",\"dueDate\":\"2026-11-01\","
+                        + "\"dueTimezone\":\"America/New_York\"}").body());
+        String id = created.path("id").asText();
+        long ownerId = Long.parseLong(created.path("ownerId").asText());
+        assertEquals(404, bob.write("PATCH", "/commitments/" + id,
+                "{\"expectedVersion\":\"0\",\"title\":\"stolen\"}").statusCode());
+        assertEquals(404, bob.write("POST", "/commitments/" + id + "/complete",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/commitments/" + id,
+                "{\"expectedVersion\":\"0\",\"status\":\"DONE\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/commitments/" + id,
+                "{\"expectedVersion\":0,\"title\":\"invalid\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/commitments/" + id,
+                "{\"expectedVersion\":\"0\",\"dueAt\":\"2026-10-02T00:00:00Z\"}"
+        ).statusCode());
+
+        JsonNode patched = JSON.readTree(alice.write("PATCH", "/commitments/" + id, """
+                {"expectedVersion":"0","title":"revised","dueKind":"INSTANT",
+                 "dueAt":"2026-10-02T00:00:00Z","body":null}
+                """).body());
+        assertEquals("1", patched.path("version").asText());
+        assertEquals("revised", patched.path("title").asText());
+        assertTrue(patched.path("dueDate").isNull());
+        assertEquals("2026-10-02T00:00:00Z", patched.path("deadlineAt").asText());
+        assertEquals(409, alice.write("PATCH", "/commitments/" + id,
+                "{\"expectedVersion\":\"0\",\"title\":\"stale\"}").statusCode());
+
+        jdbc.update("""
+                INSERT INTO reminder (recipient_id, resource_type, resource_id, scheduled_at)
+                VALUES (?, 'COMMITMENT', ?, UTC_TIMESTAMP(6))
+                """, ownerId, Long.parseLong(id));
+        long reminderId = jdbc.queryForObject("SELECT MAX(id) FROM reminder", Long.class);
+        jdbc.update("""
+                INSERT INTO notification (recipient_id, kind, resource_type, resource_id,
+                                          message, dedupe_key)
+                VALUES (?, 'REMINDER_DUE', 'COMMITMENT', ?, '请查看提醒', ?)
+                """, ownerId, Long.parseLong(id), "commitment-reminder-" + id);
+        long reminderNotification = jdbc.queryForObject("SELECT MAX(id) FROM notification", Long.class);
+        jdbc.update("""
+                INSERT INTO notification_delivery
+                  (notification_id, source_type, reminder_id, reminder_revision, recipient_id,
+                   channel, to_address, status, lock_token, lease_until)
+                VALUES (?, 'REMINDER_DUE', ?, 1, ?, 'MAIL', 'alice@example.com',
+                        'PROCESSING', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+                        DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 2 MINUTE))
+                """, reminderNotification, reminderId, ownerId);
+        jdbc.update("""
+                INSERT INTO notification (recipient_id, kind, resource_type, resource_id,
+                                          message, dedupe_key)
+                VALUES (?, 'COMMITMENT_SHARED', 'COMMITMENT', ?, '请查看记录', ?)
+                """, ownerId, Long.parseLong(id), "commitment-business-" + id);
+        long businessNotification = jdbc.queryForObject("SELECT MAX(id) FROM notification", Long.class);
+        jdbc.update("""
+                INSERT INTO notification_delivery
+                  (notification_id, source_type, recipient_id, channel, to_address, status)
+                VALUES (?, 'BUSINESS', ?, 'MAIL', 'alice@example.com', 'QUEUED')
+                """, businessNotification, ownerId);
+
+        JsonNode done = JSON.readTree(alice.write("POST", "/commitments/" + id + "/complete",
+                "{\"expectedVersion\":\"1\",\"result\":\"完成记录\"}").body());
+        assertEquals("DONE", done.path("status").asText());
+        assertEquals("完成记录", done.path("result").asText());
+        assertFalse(done.path("isOverdue").asBoolean());
+        assertEquals("CANCELLED", jdbc.queryForObject(
+                "SELECT status FROM reminder WHERE id = ?", String.class, reminderId));
+        assertEquals(2L, jdbc.queryForObject(
+                "SELECT revision FROM reminder WHERE id = ?", Long.class, reminderId));
+        assertEquals("CANCELLED", jdbc.queryForObject("""
+                SELECT status FROM notification_delivery WHERE notification_id = ?
+                """, String.class, reminderNotification));
+        assertEquals(0L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification_delivery WHERE notification_id = ?
+                  AND (lock_token IS NOT NULL OR lease_until IS NOT NULL)
+                """, Long.class, reminderNotification));
+        assertEquals("QUEUED", jdbc.queryForObject("""
+                SELECT status FROM notification_delivery WHERE notification_id = ?
+                """, String.class, businessNotification));
+
+        JsonNode reopened = JSON.readTree(alice.write("POST", "/commitments/" + id + "/reopen",
+                "{\"expectedVersion\":\"2\"}").body());
+        assertEquals("OPEN", reopened.path("status").asText());
+        assertTrue(reopened.path("result").isNull());
+        assertEquals("CANCELLED", jdbc.queryForObject(
+                "SELECT status FROM reminder WHERE id = ?", String.class, reminderId));
+        JsonNode cancelled = JSON.readTree(alice.write("POST", "/commitments/" + id + "/cancel",
+                "{\"expectedVersion\":\"3\"}").body());
+        assertEquals("CANCELLED", cancelled.path("status").asText());
+        assertEquals(409, alice.write("POST", "/commitments/" + id + "/complete",
+                "{\"expectedVersion\":\"4\"}").statusCode());
+        assertEquals(409, alice.write("DELETE", "/commitments/" + id,
+                "{\"expectedVersion\":\"3\"}").statusCode());
+        assertEquals(404, bob.write("DELETE", "/commitments/" + id,
+                "{\"expectedVersion\":\"4\"}").statusCode());
+        assertEquals(204, alice.write("DELETE", "/commitments/" + id,
+                "{\"expectedVersion\":\"4\"}").statusCode());
+        assertEquals(404, alice.call("GET", "/commitments/" + id, null, null).statusCode());
+        assertEquals("CANCELLED", jdbc.queryForObject("""
+                SELECT status FROM notification_delivery WHERE notification_id = ?
+                """, String.class, businessNotification));
+        assertEquals(2L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification WHERE resource_type = 'COMMITMENT'
+                  AND resource_id = ? AND invalidated_at IS NOT NULL
+                """, Long.class, Long.parseLong(id)));
+    }
+
+    @Test
     void loginRequiresCsrfAndLogoutRemovesSessionAttributes() throws Exception {
         Browser alice = new Browser();
         assertEquals(401, alice.call("GET", "/me", null, null).statusCode());

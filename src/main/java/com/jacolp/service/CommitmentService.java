@@ -61,12 +61,111 @@ public class CommitmentService {
         return detail(commitment, owner, Instant.now());
     }
 
+    @Transactional
+    public CommitmentDtos.Detail patch(String username, long id, CommitmentWriteRequest input) {
+        AppUser owner = owner(username, true);
+        Commitment commitment = lockedVersion(id, owner.getId(), input.expectedVersion());
+        if (input.present().contains("title")) {
+            commitment.setTitle(input.title());
+        }
+        if (input.present().contains("body")) {
+            commitment.setBody(input.body());
+        }
+        if (input.present().contains("nextAction")) {
+            commitment.setNextAction(input.nextAction());
+        }
+        if (input.present().contains("dueKind")) {
+            commitment.setDueKind(input.dueKind());
+            commitment.setDueAt(input.dueAt());
+            commitment.setDueDate(input.dueDate());
+            commitment.setDueTimezone(input.dueTimezone());
+        }
+        if (input.present().contains("sourceType")) {
+            ensureSource(owner.getId(), input.sourceType(), input.sourceId());
+            commitment.setSourceType(input.sourceType());
+            commitment.setSourceId(input.sourceId());
+        }
+        changed(commitments.updateOwned(commitment));
+        return detail(commitments.findOwned(id, owner.getId()), owner, Instant.now());
+    }
+
+    @Transactional
+    public CommitmentDtos.Detail complete(String username, long id, long expectedVersion,
+                                          String result) {
+        return changeStatus(username, id, expectedVersion, "DONE", result);
+    }
+
+    @Transactional
+    public CommitmentDtos.Detail cancel(String username, long id, long expectedVersion) {
+        return changeStatus(username, id, expectedVersion, "CANCELLED", null);
+    }
+
+    @Transactional
+    public CommitmentDtos.Detail reopen(String username, long id, long expectedVersion) {
+        return changeStatus(username, id, expectedVersion, "OPEN", null);
+    }
+
+    @Transactional
+    public void delete(String username, long id, long expectedVersion) {
+        AppUser owner = owner(username, true);
+        lockedVersion(id, owner.getId(), expectedVersion);
+        Long reminderId = commitments.lockReminder(owner.getId(), id);
+        commitments.lockNotifications(id);
+        closeReminder(reminderId);
+        commitments.cancelNotificationDeliveries(id);
+        commitments.invalidateNotifications(id);
+        changed(commitments.deleteOwned(id, owner.getId(), expectedVersion));
+    }
+
+    private CommitmentDtos.Detail changeStatus(String username, long id, long expectedVersion,
+                                               String next, String result) {
+        AppUser owner = owner(username, true);
+        Commitment current = lockedVersion(id, owner.getId(), expectedVersion);
+        String old = current.getStatus();
+        if (("OPEN".equals(next) && "OPEN".equals(old))
+                || (!"OPEN".equals(next) && !"OPEN".equals(old))) {
+            throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "承诺状态不允许此操作");
+        }
+        Long reminderId = "OPEN".equals(next) ? null : commitments.lockReminder(owner.getId(), id);
+        changed(commitments.changeStatus(id, owner.getId(), old, next, result, expectedVersion));
+        closeReminder(reminderId);
+        return detail(commitments.findOwned(id, owner.getId()), owner, Instant.now());
+    }
+
+    private void closeReminder(Long reminderId) {
+        if (reminderId != null) {
+            commitments.cancelPendingReminder(reminderId);
+            commitments.cancelReminderDeliveries(reminderId);
+        }
+    }
+
     private AppUser owner(String username) {
-        AppUser owner = users.findByUsername(username);
+        return owner(username, false);
+    }
+
+    private AppUser owner(String username, boolean lock) {
+        AppUser owner = lock ? users.lockByUsername(username) : users.findByUsername(username);
         if (owner == null) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "请重新登录");
         }
         return owner;
+    }
+
+    private Commitment lockedVersion(long id, long ownerId, long expectedVersion) {
+        Commitment commitment = commitments.lockOwned(id, ownerId);
+        if (commitment == null) {
+            throw notFound();
+        }
+        if (commitment.getVersion() != expectedVersion) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "承诺版本已变化");
+        }
+        return commitment;
+    }
+
+    private void changed(int rows) {
+        if (rows != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "承诺版本已变化");
+        }
     }
 
     private void ensureSource(long ownerId, String type, Long id) {

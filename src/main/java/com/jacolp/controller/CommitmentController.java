@@ -8,7 +8,9 @@ import java.security.Principal;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -34,6 +36,41 @@ public class CommitmentController {
     @GetMapping("/{id}")
     public CommitmentDtos.Detail get(@PathVariable String id, Principal principal) {
         return commitments.get(principal.getName(), id(id));
+    }
+
+    @PatchMapping("/{id}")
+    public CommitmentDtos.Detail patch(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                       Principal principal) {
+        return commitments.patch(principal.getName(), id(id), CommitmentWriteRequest.patch(body));
+    }
+
+    @PostMapping("/{id}/complete")
+    public CommitmentDtos.Detail complete(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                          Principal principal) {
+        CommitmentWriteRequest.Completion input = CommitmentWriteRequest.complete(body);
+        return commitments.complete(principal.getName(), id(id), input.expectedVersion(), input.result());
+    }
+
+    @PostMapping("/{id}/cancel")
+    public CommitmentDtos.Detail cancel(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                        Principal principal) {
+        return commitments.cancel(principal.getName(), id(id),
+                CommitmentWriteRequest.expectedVersionOnly(body));
+    }
+
+    @PostMapping("/{id}/reopen")
+    public CommitmentDtos.Detail reopen(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                        Principal principal) {
+        return commitments.reopen(principal.getName(), id(id),
+                CommitmentWriteRequest.expectedVersionOnly(body));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                       Principal principal) {
+        commitments.delete(principal.getName(), id(id),
+                CommitmentWriteRequest.expectedVersionOnly(body));
+        return ResponseEntity.noContent().build();
     }
 
     private long id(String raw) {

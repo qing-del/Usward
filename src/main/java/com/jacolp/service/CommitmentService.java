@@ -13,6 +13,10 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,6 +63,47 @@ public class CommitmentService {
             throw notFound();
         }
         return detail(commitment, owner, Instant.now());
+    }
+
+    @Transactional(readOnly = true)
+    public CommitmentDtos.Page list(String username, String scope, String status, String sort,
+                                    int page, int size) {
+        if (!List.of("MINE", "PARTNER", "ALL").contains(scope)
+                || !List.of("OPEN", "DONE", "CANCELLED", "ALL").contains(status)
+                || !List.of("DEADLINE_ASC", "UPDATED_DESC").contains(sort)
+                || page < 1 || size < 1 || size > 100) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "查询参数无效");
+        }
+        Instant asOf = Instant.now();
+        AppUser owner = owner(username);
+        List<Commitment> all = "PARTNER".equals(scope) ? List.of()
+                : commitments.listOwned(owner.getId());
+        Map<String, Long> counts = Map.of(
+                "OPEN", all.stream().filter(item -> "OPEN".equals(item.getStatus())).count(),
+                "DONE", all.stream().filter(item -> "DONE".equals(item.getStatus())).count(),
+                "CANCELLED", all.stream().filter(item -> "CANCELLED".equals(item.getStatus())).count());
+        List<CommitmentDtos.Summary> matched = new ArrayList<>();
+        for (Commitment item : all) {
+            if ("ALL".equals(status) || status.equals(item.getStatus())) {
+                matched.add(summary(item, owner, asOf));
+            }
+        }
+        if ("DEADLINE_ASC".equals(sort)) {
+            matched.sort(Comparator.comparing(CommitmentDtos.Summary::deadlineAt,
+                    Comparator.nullsLast(Comparator.naturalOrder()))
+                    .thenComparing(item -> Long.parseLong(item.id())));
+        } else {
+            matched.sort(Comparator.comparing(CommitmentDtos.Summary::updatedAt).reversed()
+                    .thenComparing((CommitmentDtos.Summary item) -> Long.parseLong(item.id()),
+                            Comparator.reverseOrder()));
+        }
+        long total = matched.size();
+        long offset = ((long) page - 1) * size;
+        List<CommitmentDtos.Summary> items = offset >= total ? List.of()
+                : List.copyOf(matched.subList((int) offset,
+                        (int) Math.min(total, offset + size)));
+        return new CommitmentDtos.Page(items, total, page, size, offset + size < total,
+                asOf, counts);
     }
 
     @Transactional
@@ -198,6 +243,19 @@ public class CommitmentService {
                 : commitment.getSourceId().toString(), commitment.getSourceId() == null ? null
                 : sourceAvailable(owner.getId(), commitment.getSourceType(), commitment.getSourceId()),
                 null);
+    }
+
+    CommitmentDtos.Summary summary(Commitment commitment, AppUser owner, Instant asOf) {
+        CommitmentTime.State time = CommitmentTime.state(commitment, asOf, ZoneId.of(owner.getTimezone()));
+        CommitmentDtos.PublicOwner publicOwner = new CommitmentDtos.PublicOwner(
+                owner.getId().toString(), owner.getNickname(), owner.getAvatarStyle());
+        return new CommitmentDtos.Summary(commitment.getId().toString(),
+                commitment.getVersion().toString(), utc(commitment.getCreatedAt()),
+                utc(commitment.getUpdatedAt()), commitment.getOwnerId().toString(), publicOwner,
+                commitment.getTitle(), commitment.getNextAction(), commitment.getStatus(),
+                commitment.getDueKind(), utc(commitment.getDueAt()), commitment.getDueDate(),
+                commitment.getDueTimezone(), time.deadlineAt(), time.isOverdue(),
+                time.isDueToday(), null);
     }
 
     private Instant utc(LocalDateTime value) {

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -36,6 +37,16 @@ public class CommitmentController {
     @GetMapping("/{id}")
     public CommitmentDtos.Detail get(@PathVariable String id, Principal principal) {
         return commitments.get(principal.getName(), id(id));
+    }
+
+    @GetMapping
+    public CommitmentDtos.Page list(Principal principal,
+                                    @RequestParam(defaultValue = "MINE") String scope,
+                                    @RequestParam(defaultValue = "OPEN") String status,
+                                    @RequestParam(defaultValue = "DEADLINE_ASC") String sort,
+                                    @RequestParam(defaultValue = "1") int page,
+                                    @RequestParam(defaultValue = "20") int size) {
+        return commitments.list(principal.getName(), scope, status, sort, page, size);
     }
 
     @PatchMapping("/{id}")

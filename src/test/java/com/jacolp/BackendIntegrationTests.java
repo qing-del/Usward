@@ -240,6 +240,77 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void commitmentListPaginatesCountsStatusesAndAbsoluteDeadlines() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        String dateId = JSON.readTree(alice.write("POST", "/commitments", """
+                {"title":"date","dueKind":"DATE","dueDate":"2026-11-01",
+                 "dueTimezone":"America/New_York"}
+                """).body()).path("id").asText();
+        String instantId = JSON.readTree(alice.write("POST", "/commitments", """
+                {"title":"instant","dueKind":"INSTANT","dueAt":"2026-11-02T05:00:00Z"}
+                """).body()).path("id").asText();
+        String noDueId = JSON.readTree(alice.write("POST", "/commitments",
+                "{\"title\":\"no due\",\"body\":\"private body\"}").body())
+                .path("id").asText();
+        for (int i = 0; i < 21; i++) {
+            assertEquals(201, alice.write("POST", "/commitments",
+                    "{\"title\":\"plain " + i + "\"}").statusCode());
+        }
+        assertEquals(201, bob.write("POST", "/commitments",
+                "{\"title\":\"Bob private\"}").statusCode());
+
+        JsonNode first = JSON.readTree(alice.call("GET", "/commitments", null, null).body());
+        assertEquals(24, first.path("total").asInt());
+        assertEquals(20, first.path("items").size());
+        assertTrue(first.path("hasMore").asBoolean());
+        assertEquals(dateId, first.path("items").get(0).path("id").asText());
+        assertEquals(instantId, first.path("items").get(1).path("id").asText());
+        assertEquals("2026-11-02T05:00:00Z", first.path("items").get(0)
+                .path("deadlineAt").asText());
+        assertTrue(first.path("items").get(0).path("version").isTextual());
+        assertFalse(first.path("items").get(0).has("body"));
+        assertFalse(first.path("items").get(0).has("result"));
+        assertEquals(24, first.path("statusCounts").path("OPEN").asInt());
+        JsonNode second = JSON.readTree(alice.call("GET", "/commitments?page=2", null, null).body());
+        assertEquals(4, second.path("items").size());
+        assertFalse(second.path("hasMore").asBoolean());
+        assertEquals(24, second.path("total").asInt());
+        JsonNode last = JSON.readTree(alice.call("GET", "/commitments?page=1&size=100",
+                null, null).body());
+        assertEquals(noDueId, last.path("items").get(2).path("id").asText());
+        assertTrue(last.path("items").get(2).path("deadlineAt").isNull());
+
+        assertEquals(404, bob.call("GET", "/commitments/" + dateId, null, null).statusCode());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/commitments?scope=ALL", null, null)
+                .body()).path("total").asInt());
+        assertEquals(0, JSON.readTree(alice.call("GET", "/commitments?scope=PARTNER", null,
+                null).body()).path("total").asInt());
+        assertEquals(400, alice.call("GET", "/commitments?status=INVALID", null, null).statusCode());
+        assertEquals(400, alice.call("GET", "/commitments?size=101", null, null).statusCode());
+
+        assertEquals("DONE", JSON.readTree(alice.write("POST", "/commitments/" + dateId
+                + "/complete", "{\"expectedVersion\":\"0\"}").body()).path("status").asText());
+        assertEquals("CANCELLED", JSON.readTree(alice.write("POST", "/commitments/"
+                + instantId + "/cancel", "{\"expectedVersion\":\"0\"}").body())
+                .path("status").asText());
+        JsonNode open = JSON.readTree(alice.call("GET", "/commitments?status=OPEN", null,
+                null).body());
+        assertEquals(22, open.path("total").asInt());
+        assertEquals(24, open.path("statusCounts").path("OPEN").asInt()
+                + open.path("statusCounts").path("DONE").asInt()
+                + open.path("statusCounts").path("CANCELLED").asInt());
+        assertEquals(1, open.path("statusCounts").path("DONE").asInt());
+        assertEquals(1, open.path("statusCounts").path("CANCELLED").asInt());
+        assertEquals(22, JSON.readTree(alice.call("GET", "/me", null, null).body())
+                .path("stats").path("openCommitmentCount").asInt());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/commitments?status=DONE", null,
+                null).body()).path("total").asInt());
+    }
+
+    @Test
     void loginRequiresCsrfAndLogoutRemovesSessionAttributes() throws Exception {
         Browser alice = new Browser();
         assertEquals(401, alice.call("GET", "/me", null, null).statusCode());

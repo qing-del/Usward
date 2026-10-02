@@ -478,7 +478,7 @@ app:
 
 记忆列表额外返回 `availableTags=[{tag,count}]`：在相同 scope、archived、keyword、category 条件下、应用 tag 筛选前，对全部有权读取卡片聚合；一张卡片同一标签只计一次。卡片“再翻 9 张”使用 `size=9`，条件变化后回到第一页。
 
-承诺列表额外返回 `statusCounts={OPEN,DONE,CANCELLED}`，遵循 scope、忽略本次 status 筛选；“对方分享”数量来自 PARTNER 范围的全量计数。普通分页不承诺跨请求快照，写入后应刷新第一页及统计；单次响应内 items、total 和聚合使用一致的读取快照。
+承诺列表额外返回 `statusCounts={OPEN,DONE,CANCELLED}`，遵循 scope、忽略本次 status 筛选；“对方分享”数量来自 PARTNER 范围的全量计数。当前后端只开放本人私密承诺，ALL/MINE 均限定本人，PARTNER 为空。DATE 截止在 Java 中按其保存的 IANA 时区计算绝对边界，再排序和分页。普通分页不承诺跨请求快照，写入后应刷新第一页及统计；单次响应内 items、total 和聚合使用一致的读取快照。
 
 ### 11.5 日历与忙闲范围
 

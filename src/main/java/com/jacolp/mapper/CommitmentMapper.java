@@ -33,6 +33,10 @@ public interface CommitmentMapper {
             + "AND shared_connection_id IS NULL")
     Commitment findOwned(@Param("id") long id, @Param("ownerId") long ownerId);
 
+    @Select("SELECT " + COLUMNS + " FROM commitment WHERE owner_id = #{ownerId} "
+            + "AND shared_connection_id IS NULL")
+    List<Commitment> listOwned(@Param("ownerId") long ownerId);
+
     @Select("SELECT " + COLUMNS + " FROM commitment WHERE id = #{id} AND owner_id = #{ownerId} "
             + "AND shared_connection_id IS NULL FOR UPDATE")
     Commitment lockOwned(@Param("id") long id, @Param("ownerId") long ownerId);

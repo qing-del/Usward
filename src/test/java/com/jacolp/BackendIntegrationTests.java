@@ -14,6 +14,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import org.junit.jupiter.api.BeforeEach;
@@ -366,6 +367,98 @@ class BackendIntegrationTests {
                 ZoneId.of("America/New_York")).getFirst().id());
         assertTrue(calendar.personalDay(bobId, LocalDate.parse("2026-03-08"),
                 ZoneId.of("America/New_York")).isEmpty());
+    }
+
+    @Test
+    void dashboardAggregatesOnlyOwnTodayItemsWithFullCountsAndNoSideEffects() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        assertEquals(401, alice.call("GET", "/dashboard", null, null).statusCode());
+        assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
+        assertEquals(200, bob.login("bob", "B-user-test-password-21").statusCode());
+        ZoneId zone = ZoneId.of("Asia/Shanghai");
+        LocalDate today = LocalDate.now(zone);
+        Instant start = today.atStartOfDay(zone).toInstant();
+        Instant end = today.plusDays(1).atStartOfDay(zone).toInstant();
+        String memoryId = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"private memory\",\"title\":\"featured\"}").body())
+                .path("id").asText();
+        assertEquals(201, bob.write("POST", "/memories",
+                "{\"body\":\"Bob memory\"}").statusCode());
+        String crossingId = JSON.readTree(alice.write("POST", "/events",
+                timedEvent("crossing", start.minusSeconds(3600), start.plusSeconds(3600)))
+                .body()).path("id").asText();
+        assertEquals(201, alice.write("POST", "/events",
+                timedEvent("ended at start", start.minusSeconds(3600), start)).statusCode());
+        assertEquals(201, alice.write("POST", "/events",
+                timedEvent("starts at end", end, end.plusSeconds(3600))).statusCode());
+        for (int i = 0; i < 10; i++) {
+            assertEquals(201, alice.write("POST", "/events",
+                    timedEvent("event " + i, start.plusSeconds(7200 + i * 600),
+                            start.plusSeconds(7500 + i * 600))).statusCode());
+        }
+        assertEquals(201, bob.write("POST", "/events",
+                timedEvent("Bob secret", start.plusSeconds(1800), start.plusSeconds(3600)))
+                .statusCode());
+        String overdueId = JSON.readTree(alice.write("POST", "/commitments",
+                "{\"title\":\"overdue\",\"dueKind\":\"INSTANT\",\"dueAt\":\""
+                        + Instant.now().minusSeconds(3600) + "\"}").body()).path("id").asText();
+        for (int i = 0; i < 6; i++) {
+            assertEquals(201, alice.write("POST", "/commitments",
+                    "{\"title\":\"today " + i + "\",\"dueKind\":\"DATE\",\"dueDate\":\""
+                            + today + "\",\"dueTimezone\":\"Asia/Shanghai\"}").statusCode());
+        }
+        assertEquals(201, alice.write("POST", "/commitments",
+                "{\"title\":\"future\",\"dueKind\":\"DATE\",\"dueDate\":\""
+                        + today.plusDays(2) + "\",\"dueTimezone\":\"Asia/Shanghai\"}"
+        ).statusCode());
+        assertEquals(201, bob.write("POST", "/commitments",
+                "{\"title\":\"Bob secret\",\"dueKind\":\"DATE\",\"dueDate\":\""
+                        + today + "\",\"dueTimezone\":\"Asia/Shanghai\"}").statusCode());
+
+        JsonNode dashboard = JSON.readTree(alice.call("GET", "/dashboard", null, null).body());
+        assertEquals(today.toString(), dashboard.path("today").asText());
+        assertEquals("Asia/Shanghai", dashboard.path("timezone").asText());
+        assertTrue(dashboard.path("asOf").asText().endsWith("Z"));
+        assertEquals(memoryId, dashboard.path("featuredMemory").path("id").asText());
+        assertFalse(dashboard.path("featuredMemory").has("body"));
+        JsonNode events = dashboard.path("groups").path("events");
+        assertEquals(11, events.path("total").asInt());
+        assertEquals(10, events.path("items").size());
+        assertTrue(events.path("hasMore").asBoolean());
+        assertEquals(crossingId, events.path("items").get(0).path("id").asText());
+        JsonNode due = dashboard.path("groups").path("commitments");
+        assertEquals(7, due.path("total").asInt());
+        assertEquals(5, due.path("items").size());
+        assertTrue(due.path("hasMore").asBoolean());
+        assertEquals(overdueId, due.path("items").get(0).path("id").asText());
+        assertTrue(due.path("items").get(0).path("isOverdue").asBoolean());
+        assertFalse(due.path("items").get(0).has("body"));
+        assertFalse(due.path("items").get(0).has("result"));
+        for (String group : new String[]{"expressions", "invitations", "reminders"}) {
+            assertEquals(0, dashboard.path("groups").path(group).path("total").asInt());
+            assertEquals(0, dashboard.path("groups").path(group).path("items").size());
+            assertFalse(dashboard.path("groups").path(group).path("hasMore").asBoolean());
+        }
+        assertEquals(0, dashboard.path("unreadCount").asInt());
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM notification", Long.class));
+        JsonNode bobDashboard = JSON.readTree(bob.call("GET", "/dashboard", null, null).body());
+        assertEquals(1, bobDashboard.path("groups").path("events").path("total").asInt());
+        assertEquals(1, bobDashboard.path("groups").path("commitments").path("total").asInt());
+        assertFalse(bobDashboard.path("featuredMemory").path("id").asText().equals(memoryId));
+        assertEquals(200, alice.write("PATCH", "/me",
+                "{\"expectedVersion\":\"0\",\"timezone\":\"Pacific/Kiritimati\"}"
+        ).statusCode());
+        JsonNode shifted = JSON.readTree(alice.call("GET", "/dashboard", null, null).body());
+        assertEquals("Pacific/Kiritimati", shifted.path("timezone").asText());
+        assertEquals(LocalDate.ofInstant(Instant.parse(shifted.path("asOf").asText()),
+                ZoneId.of("Pacific/Kiritimati")).toString(), shifted.path("today").asText());
+    }
+
+    private String timedEvent(String title, Instant startsAt, Instant endsAt) {
+        return "{\"title\":\"" + title + "\",\"allDay\":false,\"startsAt\":\""
+                + startsAt + "\",\"endsAt\":\"" + endsAt
+                + "\",\"eventTimezone\":\"Asia/Shanghai\",\"availability\":\"BUSY\"}";
     }
 
     @Test

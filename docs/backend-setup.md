@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询，以及私密承诺的完整个人读写。正式 Vue 前端位于 [`frontend/`](../frontend/README.md)，尚未接入承诺；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md)，尚未接入承诺和今日聚合；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
@@ -39,3 +39,5 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 私密承诺可通过 `POST /commitments` 创建、`GET /commitments/{id}` 查看、`PATCH /commitments/{id}` 编辑、`POST /commitments/{id}/complete` 完成、`.../cancel` 取消、`.../reopen` 重开，或以 `DELETE /commitments/{id}` 删除。创建至少提交标题，可选说明、下一步和来源；截止使用 `dueKind=NONE/DATE/INSTANT`，日期截止须同时提交 `dueDate` 与 `dueTimezone`，精确截止须提交 UTC `Z` 格式的 `dueAt`。来源只接受当前可读取的本人卡片或个人事件，`sourceId` 为十进制字符串；删去来源后承诺保留，详情的 `sourceAvailable` 变为 false。PATCH 及状态、删除操作均提交字符串 `expectedVersion`；完成可带 `result`，重开会清空完成记录。
 
 `GET /commitments` 支持 `page`、`size`、`scope=MINE/PARTNER/ALL`、`status=OPEN/DONE/CANCELLED/ALL`、`sort=DEADLINE_ASC/UPDATED_DESC`。当前只有本人承诺，`PARTNER` 返回空结果。默认只列出 OPEN，按绝对截止时间升序排列，无截止时间的项放最后；日期截止依据保存的 IANA 时区换算。响应包含当前筛选的 `total` 和忽略 status 筛选的全量 `statusCounts`，列表摘要不包含说明或完成结果。
+
+`GET /dashboard` 按账号时区确定今天，并返回一次捕获的 `asOf`、`timezone`、`today`、`groups`、`featuredMemory` 和 `unreadCount`。当前 `events` 只含今日相交的本人个人事件，最多 10 条；`commitments` 只含到期或逾期的本人 OPEN 承诺，逾期优先，最多 5 条。各组的 `total` 是全量计数，`hasMore` 指示是否超过上限。`featuredMemory` 是最近更新的本人未归档卡片摘要。表达、邀约和提醒组目前为空，通知尚未生成，`unreadCount` 为 0；读取不会创建通知。

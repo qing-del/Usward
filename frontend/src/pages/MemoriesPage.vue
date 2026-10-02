@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import { ApiError, errorMessage } from '../api'
@@ -8,7 +9,8 @@ import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
 import type { MemoryCategory, MemoryDetail, MemorySummary, MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
 
-const archived = ref(false)
+const route = useRoute()
+const archived = ref(route.query.archived === '1')
 const keyword = ref('')
 const category = ref<MemoryCategory | null>(null)
 const tag = ref('')
@@ -68,7 +70,13 @@ watch([archived, category, tag, keyword], (next, previous) => {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(() => load(1), next[3] === previous[3] ? 0 : 280)
 })
-onMounted(() => load(1))
+onMounted(() => {
+  load(1)
+  if (route.query.new === '1') newMemory()
+  else if (typeof route.query.memory === 'string' && /^[1-9]\d*$/.test(route.query.memory)) {
+    openMemory(route.query.memory)
+  }
+})
 onBeforeUnmount(() => { abort?.abort(); if (searchTimer) clearTimeout(searchTimer) })
 
 function closeDialog() {

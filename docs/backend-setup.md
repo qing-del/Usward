@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写和私人日历范围查询接口。`static/UI` 仍是独立的浏览器演示，不会使用这些接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写和私人日历范围查询接口。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并接入这些接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 

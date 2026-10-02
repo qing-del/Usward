@@ -144,6 +144,9 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
+        <RouterLink to="/memories?archived=1" class="card account-link"><span class="section-heading"><strong>已归档记忆</strong>
+          <span class="badge">{{ session.user.stats.archivedMemoryCount }} 张</span></span>
+          <span class="muted">翻看自己收好的卡片　↗</span></RouterLink>
         <section class="card soft"><div class="section-heading"><h2>忙闲共享</h2><span class="badge">暂不可用</span></div>
           <p class="muted">连接功能尚未接入。现在的个人安排只对自己可见。</p>
           <label class="disabled-setting"><input type="checkbox" disabled :checked="session.user.shareAvailability" />向对方展示忙闲</label></section>

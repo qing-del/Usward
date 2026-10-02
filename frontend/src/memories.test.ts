@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 import MemoriesPage from './pages/MemoriesPage.vue'
 import { clearCsrf } from './api'
 import { listMemories } from './memories'
@@ -26,8 +27,13 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
   status, headers: { 'Content-Type': 'application/json' },
 })
 
-function mountedPage() {
-  return mount(MemoriesPage, { global: { stubs: {
+async function mountedPage() {
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/memories', component: MemoriesPage },
+  ] })
+  await router.push('/memories')
+  await router.isReady()
+  return mount(MemoriesPage, { global: { plugins: [router], stubs: {
     AppShell: { template: '<div><slot /></div>' },
     BaseDialog: { props: ['open', 'title'], template: '<div v-if="open"><slot /></div>' },
   } } })
@@ -48,7 +54,7 @@ describe('private memories', () => {
       return Promise.resolve(json(page([summary], 1, true)))
     })
     vi.stubGlobal('fetch', fetchMock)
-    const wrapper = mountedPage()
+    const wrapper = await mountedPage()
     await flushPromises()
 
     expect(fetchMock.mock.calls[0][0]).toContain('scope=MINE&archived=false')
@@ -83,7 +89,7 @@ describe('private memories', () => {
       return Promise.resolve(json(page([summary], 1)))
     })
     vi.stubGlobal('fetch', fetchMock)
-    const wrapper = mountedPage()
+    const wrapper = await mountedPage()
     await flushPromises()
     await wrapper.get('.memory-open').trigger('click')
     await flushPromises()

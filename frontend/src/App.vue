@@ -6,13 +6,13 @@ import { retrySession, session } from './session'
 const router = useRouter()
 
 async function retry() {
-  try { await retrySession(); await router.replace(session.user ? '/me' : '/login') }
+  try { await retrySession(); await router.replace(session.user ? '/today' : '/login') }
   catch { /* The retry panel displays the updated failure. */ }
 }
 
 function reauthenticated(_user: unknown, switched: boolean) {
   if (switched) {
-    window.location.assign('/me')
+    window.location.assign('/today')
   }
 }
 </script>
@@ -24,7 +24,7 @@ function reauthenticated(_user: unknown, switched: boolean) {
       <button class="btn primary" @click="retry">重新尝试</button></div>
   </div>
   <div v-else :inert="session.reauthRequired"><RouterView /></div>
-  <div v-if="session.reauthRequired" class="dialog-backdrop" role="presentation">
+  <div v-if="session.reauthRequired" class="dialog-backdrop reauth-backdrop" role="presentation">
     <section class="dialog auth-dialog" role="dialog" aria-modal="true" aria-labelledby="reauth-title">
       <span class="eyebrow">WELCOME BACK</span><h2 id="reauth-title">请重新登录</h2>
       <p class="muted">会话已结束。当前填写的内容会保留在页面上，登录后请再次确认提交。</p>

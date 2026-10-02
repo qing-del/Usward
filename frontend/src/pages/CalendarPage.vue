@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
@@ -16,8 +16,12 @@ import { addDays, calendarBounds, daysBetween, localCandidates, mondayOf, offset
 type Mode = 'agenda' | 'week' | 'month' | 'range'
 const route = useRoute()
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
-const initialDay = typeof route.query.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(route.query.day)
-  ? route.query.day : today(timezone.value)
+const initialDay = (() => {
+  if (typeof route.query.day === 'string') {
+    try { return addDays(route.query.day, 0) } catch { /* Invalid deep link uses today. */ }
+  }
+  return today(timezone.value)
+})()
 const selectedDay = ref(initialDay)
 const mode = ref<Mode>(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 600px)').matches
   ? 'agenda' : 'week')
@@ -82,6 +86,12 @@ async function load() {
 }
 watch([() => visibleRange.value.from, () => visibleRange.value.to, timezone], load, { immediate: true })
 onBeforeUnmount(() => controller?.abort())
+onMounted(() => {
+  if (route.query.new === '1') openCreate()
+  else if (typeof route.query.event === 'string' && /^[1-9]\d*$/.test(route.query.event)) {
+    openEvent(route.query.event)
+  }
+})
 
 function itemsOn(day: string): CalendarEvent[] { return eventsOnDay(events.value, day, timezone.value) }
 function dayLabel(day: string, options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric' }): string {

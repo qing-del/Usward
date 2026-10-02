@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { session } from '../session'
 
 const props = withDefaults(defineProps<{ open: boolean; title: string; wide?: boolean; busy?: boolean }>(), {
   wide: false, busy: false,
@@ -44,7 +45,7 @@ function keydown(event: KeyboardEvent) {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="dialog-backdrop" @click.self="!busy && emit('close')">
+    <div v-if="open" class="dialog-backdrop" :inert="session.reauthRequired" @click.self="!busy && emit('close')">
       <section ref="panel" class="dialog" :class="{ wide }" role="dialog" aria-modal="true"
         :aria-label="title" tabindex="-1" @keydown="keydown">
         <div class="dialog-header"><div><span class="eyebrow">KEEP A LITTLE THING</span><h2>{{ title }}</h2></div>

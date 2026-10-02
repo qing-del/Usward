@@ -6,7 +6,7 @@ const route = useRoute()
 const router = useRouter()
 function done() {
   const next = typeof route.query.next === 'string' && route.query.next.startsWith('/')
-    && !route.query.next.startsWith('//') ? route.query.next : '/me'
+    && !route.query.next.startsWith('//') ? route.query.next : '/today'
   router.replace(next)
 }
 </script>

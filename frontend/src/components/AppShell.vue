@@ -6,6 +6,7 @@ import { session } from '../session'
 
 const route = useRoute()
 const items = [
+  { to: '/today', label: '今天', symbol: '☼' },
   { to: '/calendar', label: '日历', symbol: '▦' },
   { to: '/memories', label: '记忆', symbol: '✿' },
   { to: '/me', label: '我的', symbol: '◌' },
@@ -17,7 +18,7 @@ const title = computed(() => items.find(item => item.to === route.path)?.label ?
   <a class="skip-link" href="#main-content">跳到主要内容</a>
   <div class="site-layout">
     <aside class="sidebar">
-      <RouterLink to="/me" class="brand"><span class="brand-mark">✿</span><span>Usward</span></RouterLink>
+      <RouterLink to="/today" class="brand"><span class="brand-mark">✿</span><span>Usward</span></RouterLink>
       <p class="brand-caption">把心意，放进日常</p>
       <p class="side-label">OUR EVERYDAY</p>
       <nav class="side-nav" aria-label="主导航">

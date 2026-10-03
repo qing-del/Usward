@@ -24,10 +24,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class CalendarService {
     private final CalendarMapper events;
     private final UserMapper users;
+    private final ReminderService reminders;
+    private final ResourceLifecycleService lifecycle;
 
-    public CalendarService(CalendarMapper events, UserMapper users) {
+    public CalendarService(CalendarMapper events, UserMapper users, ReminderService reminders,
+                           ResourceLifecycleService lifecycle) {
         this.events = events;
         this.users = users;
+        this.reminders = reminders;
+        this.lifecycle = lifecycle;
     }
 
     @Transactional
@@ -67,6 +72,7 @@ public class CalendarService {
     public void delete(String username, long id, long expectedVersion) {
         AppUser owner = owner(username, true);
         lockedVersion(id, owner.getId(), expectedVersion);
+        lifecycle.close(owner.getId(), "CALENDAR_EVENT", id, true);
         changed(events.deleteOwned(id, owner.getId(), expectedVersion));
     }
 
@@ -180,7 +186,7 @@ public class CalendarService {
                 utc(event.getEndsAt()), event.getStartDate(), event.getEndDateExclusive(),
                 event.getEventTimezone(), event.getAvailability(), event.isShareTitle(),
                 utc(event.getOfflineConfirmedAt()), event.getStatus(), null, null, null,
-                null, null);
+                reminders.forResource(event.getOwnerId(), "CALENDAR_EVENT", event.getId()), null);
     }
 
     private Instant utc(LocalDateTime value) {

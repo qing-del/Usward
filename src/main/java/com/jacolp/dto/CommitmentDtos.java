@@ -14,7 +14,7 @@ public final class CommitmentDtos {
                          String nextAction, String dueKind, Instant dueAt, LocalDate dueDate,
                          String dueTimezone, Instant deadlineAt, boolean isOverdue,
                          boolean isDueToday, String status, String result, String sourceType,
-                         String sourceId, Boolean sourceAvailable, Void myReminder) {
+                         String sourceId, Boolean sourceAvailable, ReminderDtos.Detail myReminder) {
     }
 
     public record PublicOwner(String id, String nickname, String avatarStyle) {

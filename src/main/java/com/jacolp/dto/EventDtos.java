@@ -15,7 +15,7 @@ public final class EventDtos {
                          String eventTimezone, String availability, boolean shareTitle,
                          Instant offlineConfirmedAt, String status, String originInvitationId,
                          String pendingChangeInvitationId, String cancellationReason,
-                         Void myReminder, Void myNotificationSetting) {
+                         ReminderDtos.Detail myReminder, Void myNotificationSetting) {
     }
 
     public record CalendarView(List<Detail> items, Instant from, Instant to,

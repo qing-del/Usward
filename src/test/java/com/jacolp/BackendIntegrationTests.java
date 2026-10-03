@@ -72,6 +72,110 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void privateRemindersValidateOwnershipRevisionModesAndCancellation() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"private\"}").body());
+        String cardId = card.path("id").asText();
+        String put = """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2026-10-03T12:00:00Z","expectedRevision":null}
+                """.formatted(cardId);
+        assertEquals(403, alice.call("PUT", "/reminders", put, null).statusCode());
+        assertEquals(404, bob.write("PUT", "/reminders", put).statusCode());
+        assertEquals(400, alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":1")).statusCode());
+        assertEquals(400, alice.write("PUT", "/reminders",
+                put.replace("2026-10-03T12:00:00Z", "2026-10-03T20:00:00+08:00")).statusCode());
+        assertEquals(400, alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":null,\"ownerId\":\"1\""))
+                .statusCode());
+        assertEquals(400, alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":null,\"deliveryMode\":\"IN_APP_AND_MAIL\""))
+                .statusCode());
+        jdbc.update("UPDATE app_user SET notification_email = 'alice@example.com' WHERE username = 'alice'");
+        assertEquals(409, alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":null,\"deliveryMode\":\"IN_APP_AND_MAIL\""))
+                .statusCode());
+        JsonNode first = JSON.readTree(alice.write("PUT", "/reminders", put).body());
+        String reminderId = first.path("id").asText();
+        assertEquals("1", first.path("revision").asText());
+        assertEquals("0", first.path("version").asText());
+        assertEquals(reminderId, JSON.readTree(alice.call("GET", "/memories/" + cardId,
+                null, null).body()).path("myReminder").path("id").asText());
+        assertEquals(404, bob.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"1\"}").statusCode());
+        assertEquals(409, alice.write("PUT", "/reminders", put).statusCode());
+        JsonNode second = JSON.readTree(alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":\"1\"")).body());
+        assertEquals("2", second.path("revision").asText());
+        JsonNode cancelled = JSON.readTree(alice.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"2\"}").body());
+        assertEquals("CANCELLED", cancelled.path("status").asText());
+        assertEquals("3", cancelled.path("revision").asText());
+        assertEquals("3", JSON.readTree(alice.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"2\"}").body()).path("revision").asText());
+        assertEquals(409, alice.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"1\"}").statusCode());
+        JsonNode reset = JSON.readTree(alice.write("PUT", "/reminders",
+                put.replace("\"expectedRevision\":null", "\"expectedRevision\":\"3\"")).body());
+        assertEquals("4", reset.path("revision").asText());
+        assertEquals(409, alice.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"3\"}").statusCode());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/reminders", null, null).body())
+                .path("total").asInt());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/reminders", null, null).body())
+                .path("total").asInt());
+    }
+
+    @Test
+    void reminderListCountsFullSetAndResourceClosureCancelsPlans() throws Exception {
+        Browser alice = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        long aliceId = users.findByUsername("alice").getId();
+        for (int index = 0; index < 22; index++) {
+            jdbc.update("INSERT INTO memory_card (owner_id, body, source_type) VALUES (?, ?, 'INTERPRETATION')",
+                    aliceId, "remember " + index);
+            long cardId = jdbc.queryForObject("SELECT MAX(id) FROM memory_card", Long.class);
+            jdbc.update("""
+                    INSERT INTO reminder (recipient_id, resource_type, resource_id, scheduled_at)
+                    VALUES (?, 'MEMORY_CARD', ?, DATE_ADD(UTC_TIMESTAMP(6), INTERVAL ? DAY))
+                    """, aliceId, cardId, index + 1);
+        }
+        JsonNode firstPage = JSON.readTree(alice.call("GET", "/reminders?size=9", null, null).body());
+        assertEquals(22, firstPage.path("total").asInt());
+        assertEquals(9, firstPage.path("items").size());
+        assertTrue(firstPage.path("hasMore").asBoolean());
+        assertEquals(22, JSON.readTree(alice.call("GET", "/reminders?status=ALL&size=1",
+                null, null).body()).path("total").asInt());
+        assertEquals(400, alice.call("GET", "/reminders?status=UNKNOWN", null, null).statusCode());
+
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"closing\"}").body());
+        String cardId = card.path("id").asText();
+        JsonNode reminder = JSON.readTree(alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2026-10-03T12:00:00Z","expectedRevision":null}
+                """.formatted(cardId)).body());
+        long reminderId = Long.parseLong(reminder.path("id").asText());
+        jdbc.update("""
+                INSERT INTO notification (recipient_id, kind, resource_type, resource_id, message, dedupe_key)
+                VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', ?)
+                """, aliceId, Long.parseLong(cardId), "test-card-closure-" + cardId);
+        assertEquals(204, alice.write("DELETE", "/memories/" + cardId,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals("CANCELLED", jdbc.queryForObject("SELECT status FROM reminder WHERE id = ?",
+                String.class, reminderId));
+        assertEquals(1L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM notification WHERE resource_type = 'MEMORY_CARD'
+                  AND resource_id = ? AND invalidated_at IS NOT NULL
+                """, Long.class, Long.parseLong(cardId)));
+        assertEquals(22, JSON.readTree(alice.call("GET", "/reminders", null, null).body())
+                .path("total").asInt());
+    }
+
+    @Test
     void privateCommitmentCreationValidatesDeadlinesSourcesAndOwnership() throws Exception {
         Browser alice = new Browser();
         Browser bob = new Browser();

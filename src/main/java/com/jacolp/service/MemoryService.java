@@ -23,10 +23,15 @@ import org.springframework.transaction.annotation.Transactional;
 public class MemoryService {
     private final MemoryMapper memories;
     private final UserMapper users;
+    private final ReminderService reminders;
+    private final ResourceLifecycleService lifecycle;
 
-    public MemoryService(MemoryMapper memories, UserMapper users) {
+    public MemoryService(MemoryMapper memories, UserMapper users, ReminderService reminders,
+                         ResourceLifecycleService lifecycle) {
         this.memories = memories;
         this.users = users;
+        this.reminders = reminders;
+        this.lifecycle = lifecycle;
     }
 
     @Transactional
@@ -100,6 +105,7 @@ public class MemoryService {
     public void delete(String username, long id, long expectedVersion) {
         AppUser owner = owner(username);
         lockedVersion(id, owner.getId(), expectedVersion);
+        lifecycle.close(owner.getId(), "MEMORY_CARD", id, true);
         changed(memories.softDelete(id, owner.getId(), expectedVersion));
         memories.deleteTags(id);
     }
@@ -194,7 +200,7 @@ public class MemoryService {
                 card.getSharedConnectionId() == null ? null : card.getSharedConnectionId().toString(),
                 card.getTitle(), card.getBody(), card.getCategory(), memories.tagsForCard(card.getId()),
                 card.getSourceType(), card.getSourceDate(), card.getNextAction(), card.isArchived(),
-                null, null);
+                reminders.forResource(card.getOwnerId(), "MEMORY_CARD", card.getId()), null);
     }
 
     private Instant utc(LocalDateTime value) {

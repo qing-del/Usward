@@ -14,7 +14,7 @@ public final class MemoryDtos {
     public record Detail(String id, String version, Instant createdAt, Instant updatedAt,
                          String ownerId, String sharedConnectionId, String title, String body,
                          String category, List<String> tags, String sourceType, LocalDate sourceDate,
-                         String nextAction, boolean archived, Object myReminder,
+                         String nextAction, boolean archived, ReminderDtos.Detail myReminder,
                          Object myNotificationSetting) {
     }
 

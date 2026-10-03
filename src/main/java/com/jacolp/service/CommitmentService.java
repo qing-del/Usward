@@ -27,13 +27,18 @@ public class CommitmentService {
     private final MemoryMapper memories;
     private final CalendarMapper events;
     private final UserMapper users;
+    private final ReminderService reminders;
+    private final ResourceLifecycleService lifecycle;
 
     public CommitmentService(CommitmentMapper commitments, MemoryMapper memories,
-                             CalendarMapper events, UserMapper users) {
+                             CalendarMapper events, UserMapper users, ReminderService reminders,
+                             ResourceLifecycleService lifecycle) {
         this.commitments = commitments;
         this.memories = memories;
         this.events = events;
         this.users = users;
+        this.reminders = reminders;
+        this.lifecycle = lifecycle;
     }
 
     @Transactional
@@ -154,11 +159,7 @@ public class CommitmentService {
     public void delete(String username, long id, long expectedVersion) {
         AppUser owner = owner(username, true);
         lockedVersion(id, owner.getId(), expectedVersion);
-        Long reminderId = commitments.lockReminder(owner.getId(), id);
-        commitments.lockNotifications(id);
-        closeReminder(reminderId);
-        commitments.cancelNotificationDeliveries(id);
-        commitments.invalidateNotifications(id);
+        lifecycle.close(owner.getId(), "COMMITMENT", id, true);
         changed(commitments.deleteOwned(id, owner.getId(), expectedVersion));
     }
 
@@ -171,17 +172,11 @@ public class CommitmentService {
                 || (!"OPEN".equals(next) && !"OPEN".equals(old))) {
             throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "承诺状态不允许此操作");
         }
-        Long reminderId = "OPEN".equals(next) ? null : commitments.lockReminder(owner.getId(), id);
-        changed(commitments.changeStatus(id, owner.getId(), old, next, result, expectedVersion));
-        closeReminder(reminderId);
-        return detail(commitments.findOwned(id, owner.getId()), owner, Instant.now());
-    }
-
-    private void closeReminder(Long reminderId) {
-        if (reminderId != null) {
-            commitments.cancelPendingReminder(reminderId);
-            commitments.cancelReminderDeliveries(reminderId);
+        if (!"OPEN".equals(next)) {
+            lifecycle.close(owner.getId(), "COMMITMENT", id, false);
         }
+        changed(commitments.changeStatus(id, owner.getId(), old, next, result, expectedVersion));
+        return detail(commitments.findOwned(id, owner.getId()), owner, Instant.now());
     }
 
     private AppUser owner(String username) {
@@ -242,7 +237,7 @@ public class CommitmentService {
                 commitment.getSourceType(), commitment.getSourceId() == null ? null
                 : commitment.getSourceId().toString(), commitment.getSourceId() == null ? null
                 : sourceAvailable(owner.getId(), commitment.getSourceType(), commitment.getSourceId()),
-                null);
+                reminders.forResource(owner.getId(), "COMMITMENT", commitment.getId()));
     }
 
     CommitmentDtos.Summary summary(Commitment commitment, AppUser owner, Instant asOf) {

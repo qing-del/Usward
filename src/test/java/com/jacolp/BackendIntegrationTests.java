@@ -18,6 +18,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -64,6 +68,7 @@ class BackendIntegrationTests {
         jdbc.update("DELETE FROM reminder");
         jdbc.update("DELETE FROM commitment");
         jdbc.update("DELETE FROM calendar_event");
+        jdbc.update("DELETE FROM pair_invite");
         jdbc.update("DELETE FROM pair_connection");
         jdbc.update("DELETE FROM memory_tag");
         jdbc.update("DELETE FROM memory_card");
@@ -72,6 +77,139 @@ class BackendIntegrationTests {
         jdbc.update("DELETE FROM app_user");
         accounts.createUser("alice", "Alice", "Asia/Shanghai", "A-user-test-password-21");
         accounts.createUser("bob", "Bob", "Asia/Shanghai", "B-user-test-password-21");
+    }
+
+    @Test
+    void connectionInvitesAreOneTimeVersionedAndKeepPrivateDataPrivate() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        assertTrue(JSON.readTree(alice.call("GET", "/connection", null, null).body())
+                .path("connection").isNull());
+        assertEquals(403, alice.call("POST", "/connection-invites", null, null).statusCode());
+        JsonNode first = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        String firstToken = first.path("token").asText();
+        assertEquals(43, firstToken.length());
+        assertEquals("0", first.path("version").asText());
+        assertFalse(jdbc.queryForObject("SELECT token_hash FROM pair_invite WHERE id = ?",
+                String.class, Long.parseLong(first.path("id").asText())).contains(firstToken));
+        JsonNode refreshed = JSON.readTree(alice.call("GET", "/connection", null, null).body());
+        assertEquals(first.path("id").asText(), refreshed.path("currentInvite").path("id").asText());
+        assertFalse(refreshed.path("currentInvite").has("token"));
+        assertEquals(404, bob.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + "A".repeat(43) + "\"}").statusCode());
+        assertEquals(400, alice.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + firstToken + "\"}").statusCode());
+        JsonNode preview = JSON.readTree(bob.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + firstToken + "\"}").body());
+        assertEquals("Alice", preview.path("inviter").path("nickname").asText());
+        assertFalse(preview.path("inviter").has("username"));
+        assertFalse(preview.path("inviter").has("notificationEmail"));
+        assertEquals(409, alice.write("POST", "/connection-invites/" + first.path("id").asText()
+                + "/revoke", "{\"expectedVersion\":\"1\"}").statusCode());
+        assertEquals("REVOKED", JSON.readTree(alice.write("POST", "/connection-invites/"
+                + first.path("id").asText() + "/revoke", "{\"expectedVersion\":\"0\"}").body())
+                .path("status").asText());
+        assertEquals(409, bob.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + firstToken + "\"}").statusCode());
+
+        JsonNode expired = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        jdbc.update("UPDATE pair_invite SET expires_at = UTC_TIMESTAMP(6) - INTERVAL 1 SECOND WHERE id = ?",
+                Long.parseLong(expired.path("id").asText()));
+        assertEquals(409, bob.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + expired.path("token").asText() + "\"}").statusCode());
+        assertTrue(JSON.readTree(alice.call("GET", "/connection", null, null).body())
+                .path("currentInvite").isNull());
+
+        JsonNode current = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        String accept = "{\"token\":\"" + current.path("token").asText()
+                + "\",\"expectedVersion\":\"0\"}";
+        assertEquals(409, bob.write("POST", "/connection-invites/accept",
+                accept.replace("\"expectedVersion\":\"0\"", "\"expectedVersion\":\"1\"")).statusCode());
+        JsonNode connected = JSON.readTree(bob.write("POST", "/connection-invites/accept", accept).body());
+        assertEquals("ACTIVE", connected.path("status").asText());
+        assertEquals(2, connected.path("members").size());
+        assertTrue(connected.path("id").isTextual());
+        assertEquals(409, bob.write("POST", "/connection-invites/accept", accept).statusCode());
+        assertEquals(409, alice.write("POST", "/connection-invites", null).statusCode());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM pair_connection", Integer.class));
+        assertEquals(0, JSON.readTree(bob.call("GET", "/memories?scope=PARTNER", null, null).body())
+                .path("total").asInt());
+        assertFalse(JSON.readTree(alice.call("GET", "/me", null, null).body())
+                .path("shareAvailability").asBoolean());
+    }
+
+    @Test
+    void simultaneousInviteAcceptanceCreatesOneConnection() throws Exception {
+        Browser alice = new Browser();
+        Browser bob1 = new Browser();
+        Browser bob2 = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob1.login("bob", "B-user-test-password-21");
+        bob2.login("bob", "B-user-test-password-21");
+        JsonNode invite = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        String body = "{\"token\":\"" + invite.path("token").asText()
+                + "\",\"expectedVersion\":\"0\"}";
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Integer> first = pool.submit(() -> {
+                start.await();
+                return bob1.write("POST", "/connection-invites/accept", body).statusCode();
+            });
+            Future<Integer> second = pool.submit(() -> {
+                start.await();
+                return bob2.write("POST", "/connection-invites/accept", body).statusCode();
+            });
+            start.countDown();
+            assertEquals(200, Math.min(first.get(), second.get()));
+            assertEquals(409, Math.max(first.get(), second.get()));
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM pair_connection", Integer.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM app_user WHERE active_connection_id IS NOT NULL",
+                Integer.class));
+    }
+
+    @Test
+    void reissueRevokesOldTokenAndAcceptRacesWithRevokeAtomically() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode first = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        JsonNode second = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        assertEquals(409, bob.write("POST", "/connection-invites/preview",
+                "{\"token\":\"" + first.path("token").asText() + "\"}").statusCode());
+        assertEquals(second.path("id").asText(), JSON.readTree(alice.call("GET", "/connection",
+                null, null).body()).path("currentInvite").path("id").asText());
+        String accept = "{\"token\":\"" + second.path("token").asText()
+                + "\",\"expectedVersion\":\"0\"}";
+        String revoke = "{\"expectedVersion\":\"0\"}";
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Integer> accepted = pool.submit(() -> {
+                start.await();
+                return bob.write("POST", "/connection-invites/accept", accept).statusCode();
+            });
+            Future<Integer> revoked = pool.submit(() -> {
+                start.await();
+                return alice.write("POST", "/connection-invites/" + second.path("id").asText()
+                        + "/revoke", revoke).statusCode();
+            });
+            start.countDown();
+            assertEquals(200, Math.min(accepted.get(), revoked.get()));
+            assertEquals(409, Math.max(accepted.get(), revoked.get()));
+        } finally {
+            pool.shutdownNow();
+        }
+        int connections = jdbc.queryForObject("SELECT COUNT(*) FROM pair_connection", Integer.class);
+        assertTrue(connections == 0 || connections == 1);
+        assertEquals(connections * 2, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM app_user WHERE active_connection_id IS NOT NULL", Integer.class));
     }
 
     @Test

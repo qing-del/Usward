@@ -2,6 +2,8 @@
 
 当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些单人接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
+连接邀请与绑定已提供后端接口；正式前端尚未接入。登录后调用 `POST /connection-invites` 可生成一次性口令，创建响应仅此一次包含 `token`。`GET /connection` 只返回当前连接和本人尚未过期的待发邀请元数据。另一账号通过 `POST /connection-invites/preview` 提交 `{ "token": "…" }` 查看邀请者公开摘要，再通过 `POST /connection-invites/accept` 提交 `{ "token": "…", "expectedVersion": "0" }` 主动接受。邀请者可用 `POST /connection-invites/{id}/revoke` 和 `{ "expectedVersion": "0" }` 撤销；口令不进入 URL，绑定不会自动分享个人内容。所有写操作继续使用登录 Session 的 CSRF 令牌。
+
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
 ```sh

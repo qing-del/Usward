@@ -15,5 +15,6 @@ public class Notification {
     private LocalDateTime createdAt;
     private LocalDateTime readAt;
     private LocalDateTime invalidatedAt;
+    private LocalDateTime updatedAt;
     private Long version;
 }

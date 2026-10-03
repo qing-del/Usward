@@ -266,6 +266,85 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void notificationInboxCountsFullVisibleSetAndReadAllUsesCommittedSnapshot() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        long aliceId = users.findByUsername("alice").getId();
+        long bobId = users.findByUsername("bob").getId();
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"private inbox\"}").body());
+        long cardId = Long.parseLong(card.path("id").asText());
+        for (int index = 0; index < 25; index++) {
+            jdbc.update("""
+                    INSERT INTO notification
+                      (recipient_id, kind, resource_type, resource_id, message, dedupe_key)
+                    VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', ?)
+                    """, aliceId, cardId, "notice-" + index);
+        }
+        long firstId = jdbc.queryForObject("SELECT MIN(id) FROM notification", Long.class);
+        jdbc.update("""
+                INSERT INTO notification
+                  (recipient_id, kind, resource_type, resource_id, message, dedupe_key)
+                VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', 'other-user')
+                """, bobId, cardId);
+        jdbc.update("""
+                INSERT INTO notification
+                  (recipient_id, kind, resource_type, resource_id, message, dedupe_key,
+                   invalidated_at)
+                VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', 'invalidated',
+                        UTC_TIMESTAMP(6))
+                """, aliceId, cardId);
+        JsonNode page = JSON.readTree(alice.call("GET", "/notifications?read=UNREAD&size=9",
+                null, null).body());
+        assertEquals(25, page.path("total").asInt());
+        assertEquals(25, page.path("unreadCount").asInt());
+        assertEquals(9, page.path("items").size());
+        assertTrue(page.path("hasMore").asBoolean());
+        String boundary = page.path("readBoundary").asText();
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null).body())
+                .path("total").asInt());
+        assertEquals(409, bob.write("POST", "/notifications/read-all",
+                "{\"readBoundary\":\"" + boundary + "\"}").statusCode());
+        assertEquals(404, bob.write("POST", "/notifications/" + firstId + "/read", "{}").statusCode());
+        assertEquals(403, alice.call("POST", "/notifications/" + firstId + "/read", "{}",
+                null).statusCode());
+        JsonNode read = JSON.readTree(alice.write("POST", "/notifications/" + firstId + "/read",
+                "{}").body());
+        assertFalse(read.path("readAt").isNull());
+        assertEquals(read.path("readAt").asText(),
+                JSON.readTree(alice.write("POST", "/notifications/" + firstId + "/read",
+                        "{}").body()).path("readAt").asText());
+
+        jdbc.update("""
+                INSERT INTO notification
+                  (recipient_id, kind, resource_type, resource_id, message, dedupe_key)
+                VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, '请查看提醒', 'late-commit')
+                """, aliceId, cardId);
+        assertEquals(400, alice.write("POST", "/notifications/read-all",
+                "{\"readBoundary\":123}").statusCode());
+        assertEquals(409, alice.write("POST", "/notifications/read-all",
+                "{\"readBoundary\":\"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"}").statusCode());
+        JsonNode result = JSON.readTree(alice.write("POST", "/notifications/read-all",
+                "{\"readBoundary\":\"" + boundary + "\"}").body());
+        assertEquals(24, result.path("updatedCount").asInt());
+        assertEquals(1, result.path("unreadCount").asInt());
+        assertEquals(0, JSON.readTree(alice.write("POST", "/notifications/read-all",
+                "{\"readBoundary\":\"" + boundary + "\"}").body())
+                .path("updatedCount").asInt());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/notifications?read=UNREAD",
+                null, null).body()).path("total").asInt());
+        assertEquals(25, JSON.readTree(alice.call("GET", "/notifications?read=READ",
+                null, null).body()).path("total").asInt());
+        assertEquals(400, alice.call("GET", "/notifications?sort=INVALID", null, null).statusCode());
+        assertEquals(204, alice.write("DELETE", "/memories/" + cardId,
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(0, JSON.readTree(alice.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+        assertEquals(404, alice.write("POST", "/notifications/" + firstId + "/read", "{}").statusCode());
+    }
+
+    @Test
     void privateCommitmentCreationValidatesDeadlinesSourcesAndOwnership() throws Exception {
         Browser alice = new Browser();
         Browser bob = new Browser();

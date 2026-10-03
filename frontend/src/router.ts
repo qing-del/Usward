@@ -7,6 +7,7 @@ import CalendarPage from './pages/CalendarPage.vue'
 import TodayPage from './pages/TodayPage.vue'
 import CommitmentsPage from './pages/CommitmentsPage.vue'
 import RemindersPage from './pages/RemindersPage.vue'
+import NotificationsPage from './pages/NotificationsPage.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -19,6 +20,7 @@ export const router = createRouter({
     { path: '/calendar', name: 'calendar', component: CalendarPage },
     { path: '/commitments', name: 'commitments', component: CommitmentsPage },
     { path: '/reminders', name: 'reminders', component: RemindersPage },
+    { path: '/notifications', name: 'notifications', component: NotificationsPage },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

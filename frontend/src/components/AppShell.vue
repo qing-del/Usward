@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import Avatar from './Avatar.vue'
 import { session } from '../session'
+import { startUnreadPolling, unread } from '../unread'
 
 const route = useRoute()
 const items = [
@@ -13,7 +14,11 @@ const items = [
 ]
 const title = computed(() => route.path === '/commitments' ? '我的承诺'
   : route.path === '/reminders' ? '私人提醒'
+    : route.path === '/notifications' ? '站内通知'
   : items.find(item => item.to === route.path)?.label ?? '我的空间')
+let stopPolling: (() => void) | null = null
+onMounted(() => { stopPolling = startUnreadPolling(route.path !== '/today' && route.path !== '/notifications') })
+onBeforeUnmount(() => { stopPolling?.(); stopPolling = null })
 </script>
 
 <template>
@@ -38,10 +43,16 @@ const title = computed(() => route.path === '/commitments' ? '我的承诺'
     <div class="site-main">
       <header class="topbar">
         <div class="breadcrumb">我的空间 <span>/</span> <strong>{{ title }}</strong></div>
-        <RouterLink to="/me" class="top-user" v-if="session.user">
-          <span class="top-private">仅自己可见</span>
-          <Avatar :nickname="session.user.nickname" :avatar-style="session.user.avatarStyle" small />
-        </RouterLink>
+        <div class="topbar-actions"><RouterLink to="/notifications" class="notification-bell"
+          :aria-current="route.path === '/notifications' ? 'page' : undefined"
+          :aria-label="unread.count === null ? '站内通知，未读数待确认' : `站内通知，${unread.count} 条未读`">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z" />
+            <path d="M10 21h4" /></svg><span v-if="unread.count" class="notification-count">{{ unread.count > 99 ? '99+' : unread.count }}</span></RouterLink>
+          <RouterLink to="/me" class="top-user" v-if="session.user">
+            <span class="top-private">仅自己可见</span>
+            <Avatar :nickname="session.user.nickname" :avatar-style="session.user.avatarStyle" small />
+          </RouterLink></div>
       </header>
       <main id="main-content" class="page-content" tabindex="-1"><slot /></main>
       <footer class="page-footer">✿　记住小事，也为彼此留一点时间。</footer>

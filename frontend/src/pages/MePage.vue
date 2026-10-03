@@ -144,6 +144,9 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
+        <RouterLink to="/notifications" class="card account-link"><span class="section-heading"><strong>站内通知</strong>
+          <span class="badge">查看收件箱</span></span>
+          <span class="muted">查看提醒留下的站内消息　↗</span></RouterLink>
         <RouterLink to="/reminders" class="card account-link"><span class="section-heading"><strong>我的私人提醒</strong>
           <span class="badge">只提醒自己</span></span>
           <span class="muted">查看待触发、已触发和已取消的设置　↗</span></RouterLink>

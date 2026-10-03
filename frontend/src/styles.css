@@ -68,6 +68,13 @@ small { font-size: 12px; }
 .breadcrumb span { margin: 0 9px; color: #bcc1b8; }
 .breadcrumb strong { color: var(--ink); font-weight: 600; }
 .top-user { display: inline-flex; align-items: center; gap: 12px; }
+.topbar-actions { display: inline-flex; align-items: center; gap: 14px; flex: none; }
+.notification-bell { position: relative; display: inline-grid; place-items: center; width: 38px; height: 38px;
+  border-radius: 12px; color: var(--green-dark); background: #eef3e9; font-size: 23px; }
+.notification-bell[aria-current="page"] { background: #dcebd5; }
+.notification-count { position: absolute; right: -7px; top: -6px; min-width: 19px; height: 19px;
+  padding: 0 4px; border-radius: 99px; background: #c87c66; color: white; font-size: 10px;
+  line-height: 19px; text-align: center; font-weight: 700; }
 .top-private { background: #edf2ea; border-radius: 99px; color: var(--green); font-size: 11px; padding: 5px 10px; }
 .page-content { width: min(100%, 1320px); margin: 0 auto; padding: 34px 38px 70px; flex: 1; }
 .page-footer { color: #a5aba0; font-size: 11px; text-align: center; padding: 18px 20px 26px; }
@@ -297,6 +304,14 @@ small { font-size: 12px; }
 .reminder-card { display: grid; justify-items: start; gap: 10px; min-width: 0; }
 .reminder-card > strong { overflow-wrap: anywhere; }
 .reminder-card > p { line-height: 1.5; }
+.notification-toolbar { margin-bottom: 20px; }
+.notification-confirm { margin-bottom: 18px; }
+.notification-list { display: grid; gap: 12px; }
+.notification-card { display: grid; justify-items: start; gap: 8px; border-left: 4px solid #d6d9cd; }
+.notification-card.unread { border-left-color: #91af83; background: #fcfdfa; }
+.notification-card p { line-height: 1.6; }
+.notification-card small { color: var(--muted); }
+.notification-card .text-button { margin-top: 4px; }
 .today-events { display: grid; gap: 9px; }
 .today-event { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; border-left: 4px solid #a6bc96; border-radius: 9px; padding: 12px; background: #edf3e9; }
 .today-event:hover { background: #e3eddf; }
@@ -349,6 +364,7 @@ small { font-size: 12px; }
   .login-panel { min-height: calc(100vh - 155px); padding: 24px 16px 70px; align-items: start; }
   .login-card { background: var(--white); border-radius: 18px; padding: 24px; box-shadow: 0 10px 40px #3046370b; }
   .top-private { display: none; }
+  .topbar-actions { gap: 9px; }
 }
 @media (max-width: 500px) {
   .settings-side { grid-template-columns: 1fr; }

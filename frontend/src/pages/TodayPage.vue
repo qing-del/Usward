@@ -11,6 +11,7 @@ import { sourceLabels } from '../memories'
 import { reminderResourceLabels, reminderResourceLink } from '../reminders'
 import type { ReminderDetail } from '../reminders'
 import { session } from '../session'
+import { setUnreadCount } from '../unread'
 
 const dashboard = ref<Dashboard | null>(null)
 const loading = ref(true)
@@ -23,7 +24,11 @@ async function load() {
   dashboard.value = null
   loading.value = true
   loadError.value = ''
-  try { dashboard.value = await getDashboard(controller.signal) }
+  try {
+    const result = await getDashboard(controller.signal)
+    dashboard.value = result
+    setUnreadCount(result.unreadCount)
+  }
   catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') return
     loadError.value = errorMessage(cause)

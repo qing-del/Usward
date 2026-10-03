@@ -117,6 +117,10 @@ small { font-size: 12px; }
 .reminder-editor { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 20px; }
 .reminder-editor h3 { font-size: 16px; }
 .reminder-editor > .muted { margin-top: 9px; line-height: 1.6; }
+.reminder-draft-fields { border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.reminder-draft-fields legend { color: var(--green-dark); font-weight: 700; padding: 0 5px; }
+.reminder-draft-fields legend small { font-weight: 400; color: var(--muted); }
+.reminder-recovery .reminder-draft-fields { margin-top: 14px; background: var(--white); }
 .empty-state { text-align: center; color: var(--muted); padding: 48px 20px; }
 .empty-state .empty-mark { font-size: 29px; color: #9caf8b; }
 .empty-state h3 { color: var(--ink); margin: 7px 0; }

@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import ReminderEditor from '../components/ReminderEditor.vue'
+import ReminderDraftFields from '../components/ReminderDraftFields.vue'
+import ReminderRecovery from '../components/ReminderRecovery.vue'
 import { ApiError, errorMessage } from '../api'
 import { cancelCommitment, commitmentDueLabel, commitmentSourceLink, completeCommitment,
   createCommitment, deleteCommitment, getCommitment, listCommitments, patchCommitment,
@@ -15,6 +17,7 @@ import { commitmentDraftFromDetail, createCommitmentValues, emptyCommitmentDraft
 import type { CommitmentDraft, CommitmentPatch, CommitmentSource,
   CommitmentWrite } from '../commitmentWrite'
 import { session } from '../session'
+import { useCreatedReminder } from '../useCreatedReminder'
 import { localCandidates } from '../time'
 
 const route = useRoute()
@@ -53,6 +56,12 @@ const actionError = ref('')
 const actionLatest = ref<CommitmentDetail | null>(null)
 const resultDraft = ref('')
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
+const mailAvailable = computed(() => !!session.user?.mailReminderAvailable && !!session.user.notificationEmail)
+const { draft: reminderDraft, pendingId: pendingReminderId, pending: reminderPending,
+  error: reminderError, review: reminderReview, reset: resetCreatedReminder,
+  validate: validateCreatedReminder, apply: applyCreatedReminder, retry: retryReminder,
+  clearPending: clearPendingReminder } = useCreatedReminder('COMMITMENT', () => timezone.value,
+  () => mailAvailable.value)
 const dueCandidates = computed(() => {
   if (!draft.dueLocal) return []
   try { return localCandidates(draft.dueLocal, timezone.value) }
@@ -122,6 +131,14 @@ async function openDetail(id: string) {
 function closeDetail() { detailOpen.value = false; detail.value = null; actionMode.value = null }
 function reminderChanged(value: CommitmentDetail['myReminder']) {
   if (detail.value) detail.value = { ...detail.value, myReminder: value }
+  if (value) clearPendingReminder()
+}
+async function retryCreatedReminder() {
+  const reminder = await retryReminder()
+  if (detail.value && reminder) detail.value = { ...detail.value, myReminder: reminder }
+  else if (detail.value && reminderReview.value) {
+    detail.value = { ...detail.value, myReminder: reminderReview.value }
+  }
 }
 function dueLabel(item: CommitmentSummary | CommitmentDetail) {
   return commitmentDueLabel(item, timezone.value)
@@ -136,6 +153,7 @@ function openCreate(linkedSource: CommitmentSource | null = null) {
   editVersion.value = ''
   formError.value = ''
   latest.value = null
+  resetCreatedReminder()
   formOpen.value = true
 }
 
@@ -165,8 +183,14 @@ async function saveCommitment() {
       if (!patchWrite) { formError.value = '当前没有需要保存的修改。'; return }
     } else createWrite = createCommitmentValues(draft, timezone.value, source.value)
   } catch (cause) { formError.value = cause instanceof Error ? cause.message : '承诺内容无效。'; return }
+  let reminderPlan: ReturnType<typeof validateCreatedReminder> = null
+  if (!editingId.value) {
+    try { reminderPlan = validateCreatedReminder() }
+    catch (cause) { formError.value = cause instanceof Error ? cause.message : '提醒时间无效。'; return }
+  }
   formPending.value = true
   try {
+    const creating = !editingId.value
     const saved = editingId.value && patchWrite
       ? await patchCommitment(editingId.value, patchWrite)
       : await createCommitment(createWrite!)
@@ -177,6 +201,11 @@ async function saveCommitment() {
     detailOpen.value = true
     if (!editingId.value) await router.replace({ path: '/commitments', query: { commitment: saved.id } })
     await load(1)
+    if (creating) {
+      const reminder = await applyCreatedReminder(saved.id, reminderPlan)
+      if (reminder) detail.value = { ...saved, myReminder: reminder }
+      else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
+    }
   } catch (cause) {
     formError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && editingId.value) {
@@ -293,6 +322,9 @@ function adoptLatestActionVersion() {
         <p v-if="detail.sourceType" class="detail-line"><strong>来源</strong>
           <RouterLink v-if="commitmentSourceLink(detail)" class="text-button" :to="commitmentSourceLink(detail)!">查看来源 ↗</RouterLink>
           <span v-else>来源不可用</span></p>
+        <ReminderRecovery v-if="pendingReminderId === detail.id" :draft="reminderDraft"
+          :timezone="timezone" :mail-available="mailAvailable" :error="reminderError"
+          :review="reminderReview" :pending="reminderPending" prefix="commitment-retry" @retry="retryCreatedReminder" />
         <ReminderEditor v-if="detail.status === 'OPEN'" :key="detail.id" resource-type="COMMITMENT"
           :resource-id="detail.id" :reminder="detail.myReminder" @changed="reminderChanged" />
         <div v-if="actionMode" class="inline-note peach mt-16">
@@ -350,7 +382,11 @@ function adoptLatestActionVersion() {
           <button type="button" class="text-button" @click="removeSource = true; source = null">不关联来源</button></div>
         <div v-else-if="editingId && detail?.sourceType && !removeSource" class="inline-note"><p>来源{{ detail.sourceAvailable ? '已关联' : '不可用' }}，编辑其它内容时会保留。</p>
           <button type="button" class="text-button" @click="removeSource = true">移除来源关联</button></div>
-        <div class="inline-note">这条承诺目前仅自己可见。截止时间不会自动创建提醒。</div>
+        <ReminderDraftFields v-if="!editingId" prefix="commitment-create" :timezone="timezone"
+          :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
+          v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
+        <p v-else class="field-help">要调整私人提醒，请先保存承诺，再在详情中设置。</p>
+        <div class="inline-note">这条承诺目前仅自己可见。截止时间不会自动创建提醒；只有明确设置才会通知自己。</div>
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <div v-if="latest" class="inline-note peach"><p>承诺在其他位置发生了变化。当前输入已保留。最新内容：</p>
           <p><strong>{{ latest.title }}</strong> · {{ dueLabel(latest) }}</p>

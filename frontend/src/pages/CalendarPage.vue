@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import ReminderEditor from '../components/ReminderEditor.vue'
+import ReminderDraftFields from '../components/ReminderDraftFields.vue'
+import ReminderRecovery from '../components/ReminderRecovery.vue'
 import { ApiError, errorMessage } from '../api'
 import { availabilityLabels, createEvent, deleteEvent, eventsOnDay, getCalendar, getEvent,
   patchEvent } from '../calendar'
@@ -11,12 +13,19 @@ import type { CalendarEvent } from '../calendar'
 import { eventWriteValues } from '../eventWrite'
 import type { EventDraft } from '../eventWrite'
 import { session } from '../session'
+import { useCreatedReminder } from '../useCreatedReminder'
 import { addDays, calendarBounds, daysBetween, localCandidates, mondayOf, offsetAt, today,
   toLocal } from '../time'
 
 type Mode = 'agenda' | 'week' | 'month' | 'range'
 const route = useRoute()
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
+const mailAvailable = computed(() => !!session.user?.mailReminderAvailable && !!session.user.notificationEmail)
+const { draft: reminderDraft, pendingId: pendingReminderId, pending: reminderPending,
+  error: reminderError, review: reminderReview, reset: resetCreatedReminder,
+  validate: validateCreatedReminder, apply: applyCreatedReminder, retry: retryReminder,
+  clearPending: clearPendingReminder } = useCreatedReminder('CALENDAR_EVENT', () => timezone.value,
+  () => mailAvailable.value)
 const initialDay = (() => {
   if (typeof route.query.day === 'string') {
     try { return addDays(route.query.day, 0) } catch { /* Invalid deep link uses today. */ }
@@ -171,6 +180,14 @@ async function openEvent(id: string) {
 function closeEvent() { detailOpen.value = false; detail.value = null }
 function reminderChanged(value: CalendarEvent['myReminder']) {
   if (detail.value) detail.value = { ...detail.value, myReminder: value }
+  if (value) clearPendingReminder()
+}
+async function retryCreatedReminder() {
+  const reminder = await retryReminder()
+  if (detail.value && reminder) detail.value = { ...detail.value, myReminder: reminder }
+  else if (detail.value && reminderReview.value) {
+    detail.value = { ...detail.value, myReminder: reminderReview.value }
+  }
 }
 function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.value === 'range') mode.value = 'agenda' }
 
@@ -184,6 +201,7 @@ function openCreate() {
   editVersion.value = ''
   latestVersion.value = null
   formError.value = ''
+  resetCreatedReminder()
   eventFormOpen.value = true
 }
 
@@ -221,8 +239,14 @@ async function saveEvent() {
   let write
   try { write = eventWriteValues(eventDraft, editingId.value === null) }
   catch (cause) { formError.value = cause instanceof Error ? cause.message : '安排时间无效。'; return }
+  let reminderPlan: ReturnType<typeof validateCreatedReminder> = null
+  if (!editingId.value) {
+    try { reminderPlan = validateCreatedReminder() }
+    catch (cause) { formError.value = cause instanceof Error ? cause.message : '提醒时间无效。'; return }
+  }
   formPending.value = true
   try {
+    const creating = !editingId.value
     const saved = editingId.value
       ? await patchEvent(editingId.value, editVersion.value, write) : await createEvent(write)
     detail.value = saved
@@ -230,6 +254,11 @@ async function saveEvent() {
     detailOpen.value = true
     latestVersion.value = null
     await load()
+    if (creating) {
+      const reminder = await applyCreatedReminder(saved.id, reminderPlan)
+      if (reminder) detail.value = { ...saved, myReminder: reminder }
+      else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
+    }
   } catch (cause) {
     formError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && editingId.value) {
@@ -338,6 +367,9 @@ async function removeEvent() {
         <p class="detail-line"><strong>时间状态</strong>{{ availabilityLabels[detail.availability] }}</p>
         <p v-if="detail.location" class="detail-line"><strong>地点</strong>{{ detail.location }}</p>
         <p v-if="detail.note" class="detail-line"><strong>私人备注</strong><span class="detail-body">{{ detail.note }}</span></p>
+        <ReminderRecovery v-if="pendingReminderId === detail.id" :draft="reminderDraft"
+          :timezone="timezone" :mail-available="mailAvailable" :error="reminderError"
+          :review="reminderReview" :pending="reminderPending" prefix="event-retry" @retry="retryCreatedReminder" />
         <ReminderEditor :key="detail.id" resource-type="CALENDAR_EVENT" :resource-id="detail.id"
           :reminder="detail.myReminder" @changed="reminderChanged" />
         <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这段安排将从日历移除。确定删除？</p>
@@ -386,6 +418,10 @@ async function removeEvent() {
         <div class="field"><label for="event-note">私人备注 <small>可选</small></label>
           <textarea id="event-note" v-model="eventDraft.note" maxlength="5000" rows="3" /></div>
         <label class="checkbox-label"><input v-model="eventDraft.offlineConfirmed" type="checkbox" /> 由我记录，线下已确认</label>
+        <ReminderDraftFields v-if="!editingId" prefix="event-create" :timezone="timezone"
+          :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
+          v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
+        <p v-else class="field-help">要调整私人提醒，请先保存安排，再在详情中设置。</p>
         <div class="inline-note">这仍是个人安排，不代表对方在系统中确认。标题和备注目前只对自己可见。</div>
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <div v-if="latestVersion" class="inline-note peach"><p>安排在其他位置发生了变化。当前输入已保留。</p>

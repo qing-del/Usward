@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
 import ReminderEditor from '../components/ReminderEditor.vue'
+import ReminderDraftFields from '../components/ReminderDraftFields.vue'
+import ReminderRecovery from '../components/ReminderRecovery.vue'
 import { ApiError, errorMessage } from '../api'
 import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
 import type { MemoryCategory, MemoryDetail, MemorySummary, MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
+import { useCreatedReminder } from '../useCreatedReminder'
 
 const route = useRoute()
 const archived = ref(route.query.archived === '1')
@@ -37,6 +40,13 @@ const latestVersion = ref<string | null>(null)
 const editVersion = ref('')
 const draft = reactive({ title: '', body: '', category: '' as MemoryCategory | '',
   tagsText: '', sourceType: 'INTERPRETATION' as SourceType, sourceDate: '', nextAction: '' })
+const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
+const mailAvailable = computed(() => !!session.user?.mailReminderAvailable && !!session.user.notificationEmail)
+const { draft: reminderDraft, pendingId: pendingReminderId, pending: reminderPending,
+  error: reminderError, review: reminderReview, reset: resetCreatedReminder,
+  validate: validateCreatedReminder, apply: applyCreatedReminder, retry: retryReminder,
+  clearPending: clearPendingReminder } = useCreatedReminder('MEMORY_CARD', () => timezone.value,
+  () => mailAvailable.value)
 
 async function load(targetPage: number) {
   abort?.abort()
@@ -94,6 +104,7 @@ function newMemory() {
   detail.value = null
   detailError.value = ''
   latestVersion.value = null
+  resetCreatedReminder()
   mode.value = 'create'
 }
 
@@ -140,8 +151,14 @@ async function saveMemory() {
     category: draft.category || null, tags: parsedTags, sourceType: draft.sourceType,
     sourceDate: draft.sourceDate || null, nextAction: draft.nextAction.trim() || null,
   }
+  let reminderPlan: ReturnType<typeof validateCreatedReminder> = null
+  if (mode.value === 'create') {
+    try { reminderPlan = validateCreatedReminder() }
+    catch (cause) { detailError.value = cause instanceof Error ? cause.message : '提醒时间无效。'; return }
+  }
   operationPending.value = true
   try {
+    const creating = mode.value === 'create'
     const saved = mode.value === 'edit' && detail.value
       ? await patchMemory(detail.value.id, editVersion.value, write) : await createMemory(write)
     detail.value = saved
@@ -149,6 +166,11 @@ async function saveMemory() {
     latestVersion.value = null
     if (archived.value) archived.value = false
     else await load(1)
+    if (creating) {
+      const reminder = await applyCreatedReminder(saved.id, reminderPlan)
+      if (reminder) detail.value = { ...saved, myReminder: reminder }
+      else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
+    }
   } catch (cause) {
     detailError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
@@ -208,6 +230,14 @@ function readableDate(value: string): string {
 }
 function reminderChanged(value: MemoryDetail['myReminder']) {
   if (detail.value) detail.value = { ...detail.value, myReminder: value }
+  if (value) clearPendingReminder()
+}
+async function retryCreatedReminder() {
+  const reminder = await retryReminder()
+  if (detail.value && reminder) detail.value = { ...detail.value, myReminder: reminder }
+  else if (detail.value && reminderReview.value) {
+    detail.value = { ...detail.value, myReminder: reminderReview.value }
+  }
 }
 </script>
 
@@ -266,6 +296,9 @@ function reminderChanged(value: MemoryDetail['myReminder']) {
           <p class="detail-line"><strong>来源</strong>{{ sourceLabels[detail.sourceType] }}</p>
           <p v-if="detail.sourceDate" class="detail-line"><strong>来源日期</strong>{{ detail.sourceDate }}</p>
           <p v-if="detail.nextAction" class="detail-line"><strong>下次行动</strong><span class="detail-body">{{ detail.nextAction }}</span></p>
+          <ReminderRecovery v-if="pendingReminderId === detail.id" :draft="reminderDraft"
+            :timezone="timezone" :mail-available="mailAvailable" :error="reminderError"
+            :review="reminderReview" :pending="reminderPending" prefix="memory-retry" @retry="retryCreatedReminder" />
           <ReminderEditor :key="detail.id" resource-type="MEMORY_CARD" :resource-id="detail.id"
             :reminder="detail.myReminder" @changed="reminderChanged" />
           <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
@@ -297,7 +330,11 @@ function reminderChanged(value: MemoryDetail['myReminder']) {
           <input id="memory-date" v-model="draft.sourceDate" type="date" /></div>
         <div class="field"><label for="memory-next">下次行动 <small>可选</small></label>
           <textarea id="memory-next" v-model="draft.nextAction" maxlength="5000" rows="2" /></div>
-        <div class="inline-note">这张卡片只对你自己可见。分享与提醒功能将在后端支持后接入。</div>
+        <ReminderDraftFields v-if="mode === 'create'" prefix="memory-create" :timezone="timezone"
+          :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
+          v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
+        <p v-else class="field-help">要调整私人提醒，请先保存卡片，再在详情中设置。</p>
+        <div class="inline-note">这张卡片只对你自己可见。分享功能仍待后端支持；提醒只发给自己。</div>
         <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
         <div v-if="latestVersion" class="inline-note peach"><p>卡片在其他位置发生了变化。当前输入已保留。</p>
           <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>

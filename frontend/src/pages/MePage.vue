@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import Avatar from '../components/Avatar.vue'
 import ConnectionPanel from '../components/ConnectionPanel.vue'
+import type { CurrentConnection, PairConnection } from '../connection'
 import { ApiError, errorMessage, request } from '../api'
 import { clearSession, logout, session, updateUser } from '../session'
 import type { AvatarStyle, Me } from '../types'
@@ -26,6 +27,13 @@ const actionError = ref('')
 const notice = ref('')
 const latest = ref<Me | null>(null)
 const initializedUserId = ref<string | null>(null)
+const connectionPanel = ref<InstanceType<typeof ConnectionPanel> | null>(null)
+const currentConnection = ref<PairConnection | null>(null)
+const connectionKnown = ref(false)
+const visibilityPending = ref(false)
+const visibilityError = ref('')
+const visibilityNotice = ref('')
+const visibilityLatest = ref<Me | null>(null)
 
 function resetFromUser(user: Me) {
   form.nickname = user.nickname
@@ -38,8 +46,54 @@ watch(() => session.user, user => {
   if (user && initializedUserId.value !== user.id) {
     resetFromUser(user)
     initializedUserId.value = user.id
+    currentConnection.value = null
+    connectionKnown.value = false
+    visibilityLatest.value = null
   }
 }, { immediate: true })
+
+function connectionChanged(value: CurrentConnection | null) {
+  currentConnection.value = value?.connection ?? null
+  connectionKnown.value = value !== null
+}
+
+async function saveVisibility(next: boolean) {
+  if (!session.user || visibilityPending.value || !connectionKnown.value) return
+  visibilityError.value = ''
+  visibilityNotice.value = ''
+  if (next && !currentConnection.value) {
+    visibilityError.value = '请先建立连接，再开启忙闲共享。'
+    return
+  }
+  visibilityPending.value = true
+  const userId = session.user.id
+  try {
+    const user = await request<Me>('PATCH', '/me', {
+      expectedVersion: session.user.version, shareAvailability: next,
+    })
+    if (session.user?.id !== userId) return
+    updateUser(user)
+    profileVersion.value = user.version
+    visibilityLatest.value = null
+    visibilityNotice.value = next ? '忙闲共享已开启。对方只会看到时间与状态。' : '忙闲共享已关闭。'
+  } catch (cause) {
+    if (session.user?.id !== userId) return
+    visibilityError.value = errorMessage(cause)
+    if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT') {
+      try { visibilityLatest.value = await request<Me>('GET', '/me') } catch { /* Keep current choice. */ }
+    }
+    if (cause instanceof ApiError && (cause.code === 'CONNECTION_REQUIRED' || cause.status === 409)) {
+      await connectionPanel.value?.refresh()
+    }
+  } finally { visibilityPending.value = false }
+}
+
+function useLatestVisibility() {
+  if (!visibilityLatest.value) return
+  updateUser(visibilityLatest.value)
+  visibilityLatest.value = null
+  visibilityError.value = '已采用最新资料。请核对忙闲状态，再决定是否修改。'
+}
 
 function validTimezone(value: string): boolean {
   try { new Intl.DateTimeFormat('zh-CN', { timeZone: value }); return true }
@@ -145,7 +199,7 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
-        <ConnectionPanel />
+        <ConnectionPanel ref="connectionPanel" @changed="connectionChanged" />
         <RouterLink to="/notifications" class="card account-link"><span class="section-heading"><strong>站内通知</strong>
           <span class="badge">查看收件箱</span></span>
           <span class="muted">查看提醒留下的站内消息　↗</span></RouterLink>
@@ -158,9 +212,22 @@ async function signOut() {
         <RouterLink to="/memories?archived=1" class="card account-link"><span class="section-heading"><strong>已归档记忆</strong>
           <span class="badge">{{ session.user.stats.archivedMemoryCount }} 张</span></span>
           <span class="muted">翻看自己收好的卡片　↗</span></RouterLink>
-        <section class="card soft"><div class="section-heading"><h2>忙闲共享</h2><span class="badge">暂不可用</span></div>
-          <p class="muted">连接功能尚未接入。现在的个人安排只对自己可见。</p>
-          <label class="disabled-setting"><input type="checkbox" disabled :checked="session.user.shareAvailability" />向对方展示忙闲</label></section>
+        <section class="card soft"><div class="section-heading"><h2>忙闲共享</h2>
+          <span class="badge">{{ currentConnection ? session.user.shareAvailability ? '已开启' : '已关闭' : '仅自己可见' }}</span></div>
+          <p class="muted">{{ currentConnection ? '开启后，对方能看到你主动标注的时间和忙闲状态。标题还需逐条选择公开。' : '建立连接后可选择开启；当前个人安排保持私密。' }}</p>
+          <button class="visibility-switch mt-16" role="switch" type="button"
+            :aria-checked="!!currentConnection && session.user.shareAvailability"
+            :disabled="!connectionKnown || !currentConnection || visibilityPending"
+            @click="saveVisibility(!session.user.shareAvailability)">
+            <span class="visibility-track" aria-hidden="true" />
+            {{ visibilityPending ? '正在保存…' : '向当前连接展示忙闲' }}
+          </button>
+          <p class="field-help mt-8">个人备注和地点始终私密；未标注的时间不代表有空。</p>
+          <p v-if="visibilityError" class="form-error mt-16" role="alert">{{ visibilityError }}</p>
+          <div v-if="visibilityLatest" class="inline-note peach mt-16"><p>资料版本已变化，服务端忙闲状态为「{{ visibilityLatest.shareAvailability ? '已开启' : '已关闭' }}」。</p>
+            <button class="text-button" @click="useLatestVisibility">采用最新资料后核对</button></div>
+          <p v-if="visibilityNotice" class="form-success mt-16" role="status">{{ visibilityNotice }}</p>
+        </section>
         <section class="card"><h2>修改密码</h2><p class="muted mt-8">保存后，当前和其他设备的会话都会结束。</p>
           <form class="form-stack mt-16" @submit.prevent="changePassword">
             <div class="field"><label for="old-password">当前密码</label>

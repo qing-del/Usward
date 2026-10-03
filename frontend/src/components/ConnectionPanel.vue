@@ -9,6 +9,8 @@ import type { CurrentConnection, InvitePreview, IssuedInvite } from '../connecti
 import { session, updateUser } from '../session'
 import type { Me } from '../types'
 
+const emit = defineEmits<{ changed: [value: CurrentConnection | null] }>()
+
 const current = ref<CurrentConnection | null>(null)
 const issued = ref<IssuedInvite | null>(null)
 const loading = ref(false)
@@ -31,6 +33,11 @@ let sequence = 0
 const connection = computed(() => current.value?.connection ?? null)
 const invite = computed(() => current.value?.currentInvite ?? null)
 
+function setCurrent(value: CurrentConnection | null) {
+  current.value = value
+  emit('changed', value)
+}
+
 function expiresAt(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: session.user?.timezone ?? 'Asia/Shanghai',
     year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
@@ -46,7 +53,7 @@ async function load() {
   try {
     const value = await getConnection()
     if (run !== sequence || session.user?.id !== userId) return
-    current.value = value
+    setCurrent(value)
     if (issued.value && issued.value.id !== value.currentInvite?.id) issued.value = null
     if (!value.connection && endStep.value) endStep.value = 0
   } catch (cause) {
@@ -59,7 +66,7 @@ async function load() {
 watch(() => session.user?.id, (id, oldId) => {
   if (id !== oldId) {
     sequence++
-    current.value = null
+    setCurrent(null)
     issued.value = null
     actionError.value = ''
     notice.value = ''
@@ -87,9 +94,9 @@ async function createInvite() {
     const value = await issueInvite()
     if (session.user?.id !== userId) return
     issued.value = value
-    current.value = { connection: null, currentInvite: {
+    setCurrent({ connection: null, currentInvite: {
       id: value.id, status: value.status, expiresAt: value.expiresAt, version: value.version,
-    } }
+    } })
     notice.value = '邀请已生成。口令只会在当前页面显示，刷新后无法找回。'
   } catch (cause) {
     if (session.user?.id !== userId) return
@@ -113,7 +120,7 @@ async function revoke() {
     await revokeInvite(invite.value.id, invite.value.version)
     if (session.user?.id !== userId) return
     issued.value = null
-    current.value = { connection: null, currentInvite: null }
+    setCurrent({ connection: null, currentInvite: null })
     notice.value = '邀请已撤销，原口令不再可用。'
   } catch (cause) {
     if (session.user?.id !== userId) return
@@ -178,7 +185,7 @@ async function acceptReceived() {
   try {
     const value = await acceptInvite(token, preview.value.version)
     if (session.user?.id !== userId) return
-    current.value = { connection: value, currentInvite: null }
+    setCurrent({ connection: value, currentInvite: null })
     issued.value = null
     receiveOpen.value = false
     tokenDraft.value = ''
@@ -212,8 +219,9 @@ async function confirmEnd() {
   endPending.value = true
   endError.value = ''
   try {
-    current.value = await endConnection(connection.value.version)
+    const value = await endConnection(connection.value.version)
     if (session.user?.id !== userId) return
+    setCurrent(value)
     issued.value = null
     endStep.value = 0
     notice.value = '连接已解除；自己的记录仍在，旧共同空间已不可访问。'
@@ -235,6 +243,8 @@ async function confirmEnd() {
     }
   } finally { endPending.value = false }
 }
+
+defineExpose({ refresh: load })
 </script>
 
 <template>

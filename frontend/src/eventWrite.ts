@@ -14,6 +14,7 @@ export interface EventDraft {
   lastDate: string
   eventTimezone: string
   availability: Availability
+  shareTitle: boolean
   offlineConfirmed: boolean
 }
 
@@ -29,18 +30,17 @@ export interface EventWrite {
   eventTimezone: string
   availability: Availability
   offlineConfirmed: boolean
-  shareTitle?: false
+  shareTitle: boolean
 }
 
-export function eventWriteValues(draft: EventDraft, creating: boolean): EventWrite {
+export function eventWriteValues(draft: EventDraft): EventWrite {
   const title = draft.title.trim()
   if (!title) throw new Error('请填写安排标题。')
   if ([...title].length > 100) throw new Error('安排标题最多 100 个字。')
   const common = {
     title, location: draft.location.trim() || null, note: draft.note.trim() || null,
     eventTimezone: draft.eventTimezone, availability: draft.availability,
-    offlineConfirmed: draft.offlineConfirmed,
-    ...(creating ? { shareTitle: false as const } : {}),
+    offlineConfirmed: draft.offlineConfirmed, shareTitle: draft.shareTitle,
   }
   if (draft.allDay) {
     if (!draft.startDate || !draft.lastDate) throw new Error('请选择开始和结束日期。')

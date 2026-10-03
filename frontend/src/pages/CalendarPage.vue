@@ -10,6 +10,8 @@ import { ApiError, errorMessage } from '../api'
 import { availabilityLabels, createEvent, deleteEvent, eventsOnDay, getCalendar, getEvent,
   patchEvent } from '../calendar'
 import type { CalendarEvent } from '../calendar'
+import { getConnection } from '../connection'
+import type { PairConnection } from '../connection'
 import { eventWriteValues } from '../eventWrite'
 import type { EventDraft } from '../eventWrite'
 import { session } from '../session'
@@ -21,6 +23,9 @@ type Mode = 'agenda' | 'week' | 'month' | 'range'
 const route = useRoute()
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
 const mailAvailable = computed(() => !!session.user?.mailReminderAvailable && !!session.user.notificationEmail)
+const currentConnection = ref<PairConnection | null>(null)
+const connectionLoading = ref(false)
+const connectionError = ref('')
 const { draft: reminderDraft, pendingId: pendingReminderId, pending: reminderPending,
   error: reminderError, review: reminderReview, reset: resetCreatedReminder,
   validate: validateCreatedReminder, apply: applyCreatedReminder, retry: retryReminder,
@@ -60,9 +65,32 @@ const eventDraft = reactive<EventDraft>({
   title: '', location: '', note: '', allDay: false, startsLocal: '', endsLocal: '',
   startOffset: '', endOffset: '', startDate: '', lastDate: '',
   eventTimezone: 'Asia/Shanghai', availability: 'BUSY', offlineConfirmed: false,
+  shareTitle: false,
 })
 let controller: AbortController | null = null
 let sequence = 0
+let connectionSequence = 0
+
+async function loadConnection() {
+  const userId = session.user?.id
+  if (!userId) { currentConnection.value = null; return }
+  const run = ++connectionSequence
+  connectionLoading.value = true
+  connectionError.value = ''
+  try {
+    const value = await getConnection()
+    if (run === connectionSequence && session.user?.id === userId) currentConnection.value = value.connection
+  } catch (cause) {
+    if (run === connectionSequence && session.user?.id === userId) {
+      currentConnection.value = null
+      connectionError.value = errorMessage(cause)
+    }
+  } finally { if (run === connectionSequence) connectionLoading.value = false }
+}
+watch(() => session.user?.id, () => { currentConnection.value = null; void loadConnection() }, { immediate: true })
+watch(() => session.reauthRequired, (required, wasRequired) => {
+  if (wasRequired && !required) void loadConnection()
+})
 
 const visibleRange = computed(() => {
   if (mode.value === 'range') return { from: rangeStart.value, to: rangeEndExclusive.value }
@@ -196,7 +224,7 @@ function openCreate() {
   Object.assign(eventDraft, { title: '', location: '', note: '', allDay: false,
     startsLocal: `${day}T18:00`, endsLocal: `${day}T19:00`, startOffset: '', endOffset: '',
     startDate: day, lastDate: day, eventTimezone: timezone.value,
-    availability: 'BUSY', offlineConfirmed: false })
+    availability: 'BUSY', offlineConfirmed: false, shareTitle: false })
   editingId.value = null
   editVersion.value = ''
   latestVersion.value = null
@@ -218,7 +246,8 @@ function openEdit() {
     startDate: event.startDate ?? startDay,
     lastDate: event.endDateExclusive ? addDays(event.endDateExclusive, -1) : startDay,
     eventTimezone: event.eventTimezone, availability: event.availability,
-    offlineConfirmed: !!event.offlineConfirmedAt })
+    offlineConfirmed: !!event.offlineConfirmedAt,
+    shareTitle: !!currentConnection.value && event.shareTitle })
   editingId.value = event.id
   editVersion.value = event.version
   latestVersion.value = null
@@ -237,7 +266,8 @@ async function saveEvent() {
   if (formPending.value) return
   formError.value = ''
   let write
-  try { write = eventWriteValues(eventDraft, editingId.value === null) }
+  try { write = eventWriteValues({ ...eventDraft,
+    shareTitle: !!currentConnection.value && eventDraft.shareTitle }) }
   catch (cause) { formError.value = cause instanceof Error ? cause.message : '安排时间无效。'; return }
   let reminderPlan: ReturnType<typeof validateCreatedReminder> = null
   if (!editingId.value) {
@@ -365,6 +395,7 @@ async function removeEvent() {
         <span v-if="detail.offlineConfirmedAt" class="badge peach">由我记录，线下确认</span></div>
         <p class="detail-body">{{ eventTimeLabel(detail) }}</p>
         <p class="detail-line"><strong>时间状态</strong>{{ availabilityLabels[detail.availability] }}</p>
+        <p class="detail-line"><strong>标题可见性</strong>{{ detail.shareTitle ? '已选择向当前连接公开' : '仅自己可见' }}</p>
         <p v-if="detail.location" class="detail-line"><strong>地点</strong>{{ detail.location }}</p>
         <p v-if="detail.note" class="detail-line"><strong>私人备注</strong><span class="detail-body">{{ detail.note }}</span></p>
         <ReminderRecovery v-if="pendingReminderId === detail.id" :draft="reminderDraft"
@@ -415,6 +446,11 @@ async function removeEvent() {
             <option v-for="(label, value) in availabilityLabels" :key="value" :value="value">{{ label }}</option></select></div>
           <div class="field"><label for="event-location">地点 <small>可选</small></label>
             <input id="event-location" v-model="eventDraft.location" maxlength="255" /></div></div>
+        <label class="checkbox-label" for="event-share-title"><input id="event-share-title"
+          v-model="eventDraft.shareTitle" type="checkbox"
+          :disabled="!currentConnection || connectionLoading" /> 向当前连接公开这段安排的标题</label>
+        <p class="field-help">{{ currentConnection ? '只有忙闲总开关开启时，对方才会看到此标题。' : '连接后才能选择公开标题；当前安排仍只属于自己。' }}地点与备注始终私密。</p>
+        <p v-if="connectionError" class="form-error" role="alert">连接状态暂不可确认：{{ connectionError }}</p>
         <div class="field"><label for="event-note">私人备注 <small>可选</small></label>
           <textarea id="event-note" v-model="eventDraft.note" maxlength="5000" rows="3" /></div>
         <label class="checkbox-label"><input v-model="eventDraft.offlineConfirmed" type="checkbox" /> 由我记录，线下已确认</label>
@@ -422,7 +458,7 @@ async function removeEvent() {
           :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
           v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
         <p v-else class="field-help">要调整私人提醒，请先保存安排，再在详情中设置。</p>
-        <div class="inline-note">这仍是个人安排，不代表对方在系统中确认。标题和备注目前只对自己可见。</div>
+        <div class="inline-note">这仍是个人安排，不代表对方在系统中确认。忙闲和标题仅按你主动选择的可见性展示。</div>
         <p v-if="formError" class="form-error" role="alert">{{ formError }}</p>
         <div v-if="latestVersion" class="inline-note peach"><p>安排在其他位置发生了变化。当前输入已保留。</p>
           <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>

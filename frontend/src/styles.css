@@ -190,6 +190,11 @@ small { font-size: 12px; }
 .connection-preview strong { display: block; font-size: 17px; }
 .connection-preview p, .connection-preview small { color: var(--muted); }
 .connection-impact { padding-left: 20px; margin: 0; display: grid; gap: 10px; }
+.visibility-switch { display: inline-flex; align-items: center; gap: 10px; text-align: left; min-height: 40px; font-weight: 700; }
+.visibility-track { display: inline-block; width: 39px; height: 23px; flex: none; border-radius: 20px; background: #b4bdb1; padding: 3px; transition: background .15s; }
+.visibility-track::before { content: ''; display: block; width: 17px; height: 17px; border-radius: 50%; background: white; box-shadow: 0 1px 3px #0002; transition: transform .15s; }
+.visibility-switch[aria-checked="true"] .visibility-track { background: var(--green); }
+.visibility-switch[aria-checked="true"] .visibility-track::before { transform: translateX(16px); }
 
 .memory-intro { display: flex; align-items: center; gap: 15px; border: 1px solid #e0e9d9; border-radius: 15px; background: #edf3e8; padding: 15px 19px; color: #52735a; margin-bottom: 21px; }
 .memory-intro-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; flex: none; background: #e1ebda; font-size: 25px; }

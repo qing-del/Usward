@@ -28,8 +28,9 @@ describe('calendar range reads', () => {
   })
 
   it('sends one range request for a calendar view and no per-day detail requests', async () => {
-    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(json({ items: [event], from: '', to: '',
-      timezone: 'Asia/Shanghai', asOf: '2026-09-29T00:00:00Z' })))
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(url.endsWith('/connection')
+      ? json({ connection: null, currentInvite: null })
+      : json({ items: [event], from: '', to: '', timezone: 'Asia/Shanghai', asOf: '2026-09-29T00:00:00Z' })))
     vi.stubGlobal('fetch', fetchMock)
     const router = createRouter({ history: createMemoryHistory(), routes: [
       { path: '/calendar', component: CalendarPage },
@@ -41,14 +42,14 @@ describe('calendar range reads', () => {
       BaseDialog: { props: ['open', 'title'], template: '<div v-if="open"><slot /></div>' },
     } } })
     await flushPromises()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(fetchMock.mock.calls[0][0]).toContain('scope=MINE')
-    expect(fetchMock.mock.calls[0][0]).toContain('timezone=Asia%2FShanghai')
+    expect(fetchMock.mock.calls.filter(call => call[0].includes('/calendar?'))).toHaveLength(1)
+    expect(fetchMock.mock.calls.find(call => call[0].includes('/calendar?'))![0]).toContain('scope=MINE')
+    expect(fetchMock.mock.calls.find(call => call[0].includes('/calendar?'))![0]).toContain('timezone=Asia%2FShanghai')
     expect(wrapper.findAll('.week-day')).toHaveLength(7)
     const month = wrapper.findAll('.calendar-toolbar .tab')[2]!
     await month.trigger('click')
     await flushPromises()
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.filter(call => call[0].includes('/calendar?'))).toHaveLength(2)
     expect(wrapper.findAll('.month-cell')).toHaveLength(42)
     wrapper.unmount()
   })
@@ -67,5 +68,44 @@ describe('calendar range reads', () => {
     const url = fetchMock.mock.calls[0][0] as string
     expect(url).toContain('from=2026-09-28T16%3A00%3A00.000Z')
     expect(url).toContain('to=2026-09-29T16%3A00%3A00.000Z')
+  })
+
+  it('edits a shared-title choice only for the connected account', async () => {
+    let saved = { ...event, shareTitle: true }
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url.endsWith('/connection')) return Promise.resolve(json({ connection: {
+        id: '4', status: 'ACTIVE', version: '0', members: [],
+      }, currentInvite: null }))
+      if (url.includes('/calendar?')) return Promise.resolve(json({ items: [saved], from: '', to: '',
+        timezone: 'Asia/Shanghai', asOf: '' }))
+      if (url.endsWith('/events/1') && init?.method === 'GET') return Promise.resolve(json(saved))
+      if (url.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      if (url.endsWith('/events/1') && init?.method === 'PATCH') {
+        saved = { ...saved, shareTitle: false, version: '1' }
+        return Promise.resolve(json(saved))
+      }
+      throw Error(`Unexpected ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/calendar', component: CalendarPage },
+    ] })
+    await router.push('/calendar?day=2026-09-29')
+    await router.isReady()
+    const wrapper = mount(CalendarPage, { global: { plugins: [router], stubs: {
+      AppShell: { template: '<div><slot /></div>' },
+      BaseDialog: { props: ['open', 'title'], template: '<div v-if="open"><slot /></div>' },
+    } } })
+    await flushPromises()
+    await wrapper.get('.calendar-event').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '编辑安排')!.trigger('click')
+    expect((wrapper.get('#event-share-title').element as HTMLInputElement).checked).toBe(true)
+    await wrapper.get('#event-share-title').setValue(false)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const patchCall = fetchMock.mock.calls.find(call => call[1]?.method === 'PATCH')!
+    expect(JSON.parse(patchCall[1].body)).toMatchObject({ expectedVersion: '0', shareTitle: false })
+    wrapper.unmount()
   })
 })

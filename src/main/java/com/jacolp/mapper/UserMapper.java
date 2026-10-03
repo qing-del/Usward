@@ -26,6 +26,13 @@ public interface UserMapper {
     AppUser lockByUsername(@Param("username") String username);
 
     @Select("""
+            SELECT id, username, password_hash, nickname, avatar_style, timezone,
+                   notification_email, active_connection_id, share_availability, version
+            FROM app_user WHERE id = #{id} FOR UPDATE
+            """)
+    AppUser lockById(@Param("id") long id);
+
+    @Select("""
             SELECT COUNT(*) FROM pair_connection
             WHERE id = #{connectionId} AND status = 'ACTIVE'
               AND (user_a_id = #{userId} OR user_b_id = #{userId})

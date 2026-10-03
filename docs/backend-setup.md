@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与查询，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入之前的单人接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入之前的单人接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
@@ -42,4 +42,4 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 `GET /dashboard` 按账号时区确定今天，并返回一次捕获的 `asOf`、`timezone`、`today`、`groups`、`featuredMemory` 和 `unreadCount`。当前 `events` 只含今日相交的本人个人事件，最多 10 条；`commitments` 只含到期或逾期的本人 OPEN 承诺，逾期优先，最多 5 条。各组的 `total` 是全量计数，`hasMore` 指示是否超过上限。`featuredMemory` 是最近更新的本人未归档卡片摘要。表达、邀约和提醒组目前为空，通知尚未生成，`unreadCount` 为 0；读取不会创建通知。
 
-`PUT /reminders` 为当前可读取的本人卡片、个人事件或 OPEN 承诺设置私人提醒，提交 `resourceType`、字符串 `resourceId`、UTC `Z` 格式的 `scheduledAt`、可选的 `deliveryMode=IN_APP`，以及首次为 `null`、之后为字符串的 `expectedRevision`。设置成功返回含字符串 `id/revision/version` 的提醒 DTO；即使时间与方式不变，重新设置仍递增修订号。`DELETE /reminders/{id}` 携带字符串 `expectedRevision`，返回状态为 CANCELLED 的最新 DTO；`GET /reminders` 支持 `resourceType`、`status=ALL/PENDING/FIRED/CANCELLED`、`page`、`size` 和 `sort=SCHEDULED_ASC`。卡片、事件和承诺详情中的 `myReminder` 可用于刷新后取得当前修订号。尚未接入 SMTP；选择 `IN_APP_AND_MAIL` 时，无本人收件邮箱返回 `RECIPIENT_EMAIL_REQUIRED`，已有邮箱则返回 `MAIL_NOT_AVAILABLE`。到时扫描与通知读取将在后续提交接入。
+`PUT /reminders` 为当前可读取的本人卡片、个人事件或 OPEN 承诺设置私人提醒，提交 `resourceType`、字符串 `resourceId`、UTC `Z` 格式的 `scheduledAt`、可选的 `deliveryMode=IN_APP`，以及首次为 `null`、之后为字符串的 `expectedRevision`。设置成功返回含字符串 `id/revision/version` 的提醒 DTO；即使时间与方式不变，重新设置仍递增修订号。`DELETE /reminders/{id}` 携带字符串 `expectedRevision`，返回状态为 CANCELLED 的最新 DTO；`GET /reminders` 支持 `resourceType`、`status=ALL/PENDING/FIRED/CANCELLED`、`page`、`size` 和 `sort=SCHEDULED_ASC`。卡片、事件和承诺详情中的 `myReminder` 可用于刷新后取得当前修订号。尚未接入 SMTP；选择 `IN_APP_AND_MAIL` 时，无本人收件邮箱返回 `RECIPIENT_EMAIL_REQUIRED`，已有邮箱则返回 `MAIL_NOT_AVAILABLE`。后台每分钟分批扫描已到时的 PENDING 提醒，重启后补扫；站内通知与 FIRED 状态同事务保存，重复扫描不会生成第二条。同一库中若已有邮件模式提醒，到时仍创建站内通知，并记录 `FAILED/MAIL_DISABLED` 邮件任务，不发送邮件。通知读取接口将在后续提交接入。

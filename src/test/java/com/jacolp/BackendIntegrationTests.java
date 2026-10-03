@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.jacolp.service.AccountService;
 import com.jacolp.service.CalendarService;
 import com.jacolp.service.MemoryService;
+import com.jacolp.service.ReminderScanService;
 import com.jacolp.mapper.UserMapper;
 import java.net.CookieManager;
 import java.net.URI;
@@ -44,12 +45,14 @@ class BackendIntegrationTests {
         properties.add("spring.datasource.url", () -> url);
         properties.add("spring.datasource.username", () -> System.getenv("USWARD_TEST_DB_USER"));
         properties.add("spring.datasource.password", () -> System.getenv("USWARD_TEST_DB_PASSWORD"));
+        properties.add("usward.reminder.scan-enabled", () -> "false");
     }
 
     @Autowired JdbcTemplate jdbc;
     @Autowired AccountService accounts;
     @Autowired CalendarService calendar;
     @Autowired MemoryService memories;
+    @Autowired ReminderScanService reminderScan;
     @Autowired UserMapper users;
     @Autowired JdbcIndexedSessionRepository sessions;
     @Value("${local.server.port}") int port;
@@ -173,6 +176,93 @@ class BackendIntegrationTests {
                 """, Long.class, Long.parseLong(cardId)));
         assertEquals(22, JSON.readTree(alice.call("GET", "/reminders", null, null).body())
                 .path("total").asInt());
+    }
+
+    @Test
+    void dueReminderScanIsDurableDeduplicatedAndSkipsClosedResources() throws Exception {
+        Browser alice = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        long aliceId = users.findByUsername("alice").getId();
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"never in notice\"}").body());
+        String cardId = card.path("id").asText();
+        JsonNode reminder = JSON.readTree(alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2020-10-03T12:00:00Z","expectedRevision":null}
+                """.formatted(cardId)).body());
+        long reminderId = Long.parseLong(reminder.path("id").asText());
+        assertEquals(1, reminderScan.scanDue());
+        assertEquals(0, reminderScan.scanDue());
+        assertEquals("FIRED", jdbc.queryForObject("SELECT status FROM reminder WHERE id = ?",
+                String.class, reminderId));
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE dedupe_key = ?",
+                Long.class, "reminder:" + reminderId + ":1"));
+        String message = jdbc.queryForObject("SELECT message FROM notification WHERE dedupe_key = ?",
+                String.class, "reminder:" + reminderId + ":1");
+        assertFalse(message.contains("never in notice"));
+        assertEquals(0L, jdbc.queryForObject("SELECT COUNT(*) FROM notification_delivery", Long.class));
+
+        JsonNode closedCard = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"closed\"}").body());
+        String closedId = closedCard.path("id").asText();
+        alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2020-10-03T12:00:00Z","expectedRevision":null}
+                """.formatted(closedId));
+        alice.write("DELETE", "/memories/" + closedId, "{\"expectedVersion\":\"0\"}");
+        assertEquals(0, reminderScan.scanDue());
+        assertEquals(1L, jdbc.queryForObject("""
+                SELECT COUNT(*) FROM reminder WHERE resource_type = 'MEMORY_CARD'
+                  AND resource_id = ? AND status = 'CANCELLED'
+                """, Long.class, Long.parseLong(closedId)));
+
+        JsonNode legacyCard = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"legacy\"}").body());
+        jdbc.update("""
+                INSERT INTO reminder (recipient_id, resource_type, resource_id, scheduled_at,
+                                      delivery_mode)
+                VALUES (?, 'MEMORY_CARD', ?, DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND),
+                        'IN_APP_AND_MAIL')
+                """, aliceId, Long.parseLong(legacyCard.path("id").asText()));
+        assertEquals(1, reminderScan.scanDue());
+        assertEquals("FAILED", jdbc.queryForObject("SELECT status FROM notification_delivery",
+                String.class));
+        assertEquals("MAIL_DISABLED", jdbc.queryForObject(
+                "SELECT last_error_code FROM notification_delivery", String.class));
+    }
+
+    @Test
+    void concurrentScansAndCancellationNeverDuplicateDueNotice() throws Exception {
+        Browser alice = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories", "{\"body\":\"race\"}").body());
+        JsonNode reminder = JSON.readTree(alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2020-10-03T12:00:00Z","expectedRevision":null}
+                """.formatted(card.path("id").asText())).body());
+        String reminderId = reminder.path("id").asText();
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var start = new java.util.concurrent.CountDownLatch(1);
+            var first = pool.submit(() -> {
+                start.await();
+                return reminderScan.scanDue();
+            });
+            var second = pool.submit(() -> {
+                start.await();
+                return reminderScan.scanDue();
+            });
+            start.countDown();
+            first.get();
+            second.get();
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE dedupe_key = ?",
+                Long.class, "reminder:" + reminderId + ":1"));
+        assertEquals(0, reminderScan.scanDue());
+        JsonNode cancelled = JSON.readTree(alice.write("DELETE", "/reminders/" + reminderId,
+                "{\"expectedRevision\":\"1\"}").body());
+        assertEquals("CANCELLED", cancelled.path("status").asText());
+        assertEquals(1L, jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE dedupe_key = ?",
+                Long.class, "reminder:" + reminderId + ":1"));
     }
 
     @Test

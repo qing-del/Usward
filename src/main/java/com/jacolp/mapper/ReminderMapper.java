@@ -38,6 +38,16 @@ public interface ReminderMapper {
     @Select("SELECT " + COLUMNS + " FROM reminder WHERE id = #{id} AND recipient_id = #{recipientId}")
     Reminder findOwned(@Param("id") long id, @Param("recipientId") long recipientId);
 
+    @Select("SELECT " + COLUMNS + " FROM reminder WHERE id = #{id}")
+    Reminder findById(@Param("id") long id);
+
+    @Select("""
+            SELECT id FROM reminder WHERE status = 'PENDING'
+              AND scheduled_at <= UTC_TIMESTAMP(6)
+            ORDER BY scheduled_at ASC, id ASC LIMIT 20
+            """)
+    List<Long> dueIds();
+
     @Select("SELECT " + COLUMNS + " FROM reminder WHERE id = #{id} AND recipient_id = #{recipientId} FOR UPDATE")
     Reminder lockOwned(@Param("id") long id, @Param("recipientId") long recipientId);
 
@@ -64,6 +74,16 @@ public interface ReminderMapper {
             """)
     int cancel(@Param("id") long id, @Param("recipientId") long recipientId,
                @Param("revision") long revision);
+
+    @Update("""
+            UPDATE reminder SET status = 'FIRED', version = version + 1,
+                updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND recipient_id = #{recipientId}
+              AND status = 'PENDING' AND revision = #{revision}
+              AND scheduled_at <= UTC_TIMESTAMP(6)
+            """)
+    int markFired(@Param("id") long id, @Param("recipientId") long recipientId,
+                  @Param("revision") long revision);
 
     @Update("""
             UPDATE notification_delivery SET status = 'CANCELLED', lock_token = NULL,

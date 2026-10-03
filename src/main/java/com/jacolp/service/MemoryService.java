@@ -103,7 +103,7 @@ public class MemoryService {
 
     @Transactional
     public void delete(String username, long id, long expectedVersion) {
-        AppUser owner = owner(username);
+        AppUser owner = owner(username, true);
         lockedVersion(id, owner.getId(), expectedVersion);
         lifecycle.close(owner.getId(), "MEMORY_CARD", id, true);
         changed(memories.softDelete(id, owner.getId(), expectedVersion));
@@ -163,7 +163,11 @@ public class MemoryService {
     }
 
     private AppUser owner(String username) {
-        AppUser owner = users.findByUsername(username);
+        return owner(username, false);
+    }
+
+    private AppUser owner(String username, boolean lock) {
+        AppUser owner = lock ? users.lockByUsername(username) : users.findByUsername(username);
         if (owner == null) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "请重新登录");
         }

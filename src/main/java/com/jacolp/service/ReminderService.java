@@ -121,14 +121,7 @@ public class ReminderService {
         }
         Instant asOf = Instant.now();
         AppUser owner = owner(username, false);
-        List<ReminderDtos.Detail> matched = new ArrayList<>();
-        for (Reminder row : reminders.listRecipient(owner.getId())) {
-            if ((resourceType == null || resourceType.equals(row.getResourceType()))
-                    && ("ALL".equals(status) || status.equals(row.getStatus()))
-                    && accessible(owner.getId(), row.getResourceType(), row.getResourceId())) {
-                matched.add(dto(row));
-            }
-        }
+        List<ReminderDtos.Detail> matched = visible(owner.getId(), resourceType, status);
         long total = matched.size();
         long offset = ((long) page - 1) * size;
         List<ReminderDtos.Detail> items = offset >= total ? List.of()
@@ -141,6 +134,23 @@ public class ReminderService {
     public ReminderDtos.Detail forResource(long recipientId, String resourceType, long resourceId) {
         Reminder row = reminders.findResource(recipientId, resourceType, resourceId);
         return row == null ? null : dto(row);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ReminderDtos.Detail> pendingForDashboard(long recipientId) {
+        return visible(recipientId, null, "PENDING");
+    }
+
+    private List<ReminderDtos.Detail> visible(long recipientId, String resourceType, String status) {
+        List<ReminderDtos.Detail> matched = new ArrayList<>();
+        for (Reminder row : reminders.listRecipient(recipientId)) {
+            if ((resourceType == null || resourceType.equals(row.getResourceType()))
+                    && ("ALL".equals(status) || status.equals(row.getStatus()))
+                    && accessible(recipientId, row.getResourceType(), row.getResourceId())) {
+                matched.add(dto(row));
+            }
+        }
+        return matched;
     }
 
     public boolean accessible(long recipientId, String type, long resourceId) {

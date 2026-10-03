@@ -12,7 +12,7 @@ public final class DashboardDtos {
     }
 
     public record Groups(Group<EventDtos.Detail> events, Group<Object> expressions,
-                         Group<Object> invitations, Group<Object> reminders,
+                         Group<Object> invitations, Group<ReminderDtos.Detail> reminders,
                          Group<CommitmentDtos.Summary> commitments) {
     }
 

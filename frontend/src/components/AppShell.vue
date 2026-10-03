@@ -12,6 +12,7 @@ const items = [
   { to: '/me', label: '我的', symbol: '◌' },
 ]
 const title = computed(() => route.path === '/commitments' ? '我的承诺'
+  : route.path === '/reminders' ? '私人提醒'
   : items.find(item => item.to === route.path)?.label ?? '我的空间')
 </script>
 

@@ -8,6 +8,8 @@ import type { CommitmentSummary } from '../commitments'
 import { getDashboard } from '../dashboard'
 import type { Dashboard } from '../dashboard'
 import { sourceLabels } from '../memories'
+import { reminderResourceLabels, reminderResourceLink } from '../reminders'
+import type { ReminderDetail } from '../reminders'
 import { session } from '../session'
 
 const dashboard = ref<Dashboard | null>(null)
@@ -42,6 +44,13 @@ function eventLabel(event: CalendarEvent, timezone: string): string {
 }
 function dueLabel(item: CommitmentSummary, timezone: string): string {
   return commitmentDueLabel(item, timezone)
+}
+function reminderTime(item: ReminderDetail, timezone: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: timezone, month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(item.scheduledAt))
+}
+function waitingForScan(item: ReminderDetail, asOf: string): boolean {
+  return Date.parse(item.scheduledAt) <= Date.parse(asOf)
 }
 </script>
 
@@ -82,7 +91,7 @@ function dueLabel(item: CommitmentSummary, timezone: string): string {
           <span v-if="item.nextAction" class="commitment-next"><small>下一步</small>{{ item.nextAction }}</span></RouterLink></div>
         <p v-if="dashboard.groups.commitments.hasMore" class="muted today-more">显示前 {{ dashboard.groups.commitments.items.length }} 条，共 {{ dashboard.groups.commitments.total }} 条。</p>
       </section></div>
-      <section class="card today-featured"><div class="section-heading"><h2>最近记下</h2>
+      <div class="today-grid today-lower-grid"><section class="card today-featured"><div class="section-heading"><h2>最近记下</h2>
         <RouterLink class="text-button" to="/memories">翻看记忆</RouterLink></div>
         <div v-if="!dashboard.featuredMemory" class="empty-state"><span class="empty-mark">✿</span>
           <h3>还没有卡片</h3><p>把一件值得记住的小事写下来。</p>
@@ -93,8 +102,19 @@ function dueLabel(item: CommitmentSummary, timezone: string): string {
           <p>{{ sourceLabels[dashboard.featuredMemory.sourceType] }}</p>
           <div class="memory-card-tags">{{ dashboard.featuredMemory.tags.map(tag => `# ${tag}`).join('　') }}</div>
           <span class="text-button">查看卡片　↗</span></RouterLink>
-      </section>
+      </section><section class="card"><div class="section-heading"><h2>我的私人提醒
+        <span class="badge">{{ dashboard.groups.reminders.total }}</span></h2>
+        <RouterLink class="text-button" to="/reminders?status=PENDING">查看全部</RouterLink></div>
+        <div v-if="!dashboard.groups.reminders.items.length" class="empty-state"><span class="empty-mark">✿</span>
+          <h3>没有待触发的提醒</h3><p>可以在记忆、个人安排或自己的承诺中设置。</p></div>
+        <div v-else class="today-reminders"><RouterLink v-for="item in dashboard.groups.reminders.items"
+          :key="item.id" class="today-reminder" :to="reminderResourceLink(item)">
+          <span class="badge green">待触发</span><strong>{{ reminderResourceLabels[item.resourceType] }} #{{ item.resourceId }}</strong>
+          <small>{{ reminderTime(item, dashboard.timezone) }} · {{ item.deliveryMode === 'IN_APP' ? '站内通知' : '站内及邮件通知' }}</small>
+          <span v-if="waitingForScan(item, dashboard.asOf)" class="muted">已到设置时间，等待后端处理。</span></RouterLink></div>
+        <p v-if="dashboard.groups.reminders.hasMore" class="muted today-more">显示前 {{ dashboard.groups.reminders.items.length }} 条，共 {{ dashboard.groups.reminders.total }} 条。</p>
+      </section></div>
     </template>
-    <div class="today-note">这里展示已接入的个人内容。表达、邀约、提醒和通知会随对应接口逐步加入。</div>
+    <div class="today-note">这里展示已接入的个人内容。表达和邀约会随对应接口逐步加入。</div>
   </AppShell>
 </template>

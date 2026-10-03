@@ -284,6 +284,19 @@ small { font-size: 12px; }
 .today-art { display: block; width: 100%; max-width: 260px; max-height: 190px; object-fit: contain; justify-self: center; }
 .today-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, .75fr); align-items: start; gap: 20px; }
 .today-grid .card { min-height: 260px; }
+.today-lower-grid { margin-top: 20px; }
+.today-lower-grid .today-featured { margin-top: 0; }
+.today-reminders, .reminder-list { display: grid; gap: 12px; }
+.today-reminder { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.today-reminder:last-child { border-bottom: 0; }
+.today-reminder .badge { justify-self: start; }
+.today-reminder small { color: var(--muted); }
+.reminder-toolbar { margin-bottom: 20px; }
+.reminder-toolbar .field { min-width: min(100%, 190px); }
+.reminder-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.reminder-card { display: grid; justify-items: start; gap: 10px; min-width: 0; }
+.reminder-card > strong { overflow-wrap: anywhere; }
+.reminder-card > p { line-height: 1.5; }
 .today-events { display: grid; gap: 9px; }
 .today-event { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; border-left: 4px solid #a6bc96; border-radius: 9px; padding: 12px; background: #edf3e9; }
 .today-event:hover { background: #e3eddf; }
@@ -348,6 +361,7 @@ small { font-size: 12px; }
   .search-field { width: 100%; }
   .form-grid { grid-template-columns: 1fr; }
   .calendar-aside { grid-template-columns: 1fr; }
+  .reminder-list { grid-template-columns: 1fr; }
   .calendar-toolbar .tabs { order: 2; }
   .agenda-list { padding: 5px 12px; }
   .agenda-day { grid-template-columns: 47px minmax(0, 1fr); gap: 8px; }

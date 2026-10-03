@@ -2,6 +2,7 @@ import { request } from './api'
 import type { CalendarEvent } from './calendar'
 import type { CommitmentSummary } from './commitments'
 import type { MemorySummary } from './memories'
+import type { ReminderDetail } from './reminders'
 
 export interface DashboardGroup<T> {
   items: T[]
@@ -17,7 +18,7 @@ export interface Dashboard {
     events: DashboardGroup<CalendarEvent>
     expressions: DashboardGroup<unknown>
     invitations: DashboardGroup<unknown>
-    reminders: DashboardGroup<unknown>
+    reminders: DashboardGroup<ReminderDetail>
     commitments: DashboardGroup<CommitmentSummary>
   }
   featuredMemory: MemorySummary | null

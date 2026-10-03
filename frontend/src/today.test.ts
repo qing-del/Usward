@@ -17,7 +17,10 @@ const dashboard = {
     commitments: { items: [{ id: '4', title: '借一本书', nextAction: '去图书馆',
       dueKind: 'DATE', dueDate: '2026-10-03', dueTimezone: 'America/New_York',
       dueAt: null, isOverdue: true, isDueToday: false }], total: 7, hasMore: true },
-    expressions: empty, invitations: empty, reminders: empty,
+    expressions: empty, invitations: empty,
+    reminders: { items: [{ id: '5', resourceType: 'MEMORY_CARD', resourceId: '3',
+      scheduledAt: '2026-10-03T11:00:00Z', deliveryMode: 'IN_APP', revision: '2',
+      status: 'PENDING' }], total: 7, hasMore: true },
   },
   featuredMemory: { id: '3', title: '最近卡片', sourceType: 'INTERPRETATION', tags: ['日常'] },
   unreadCount: 0,
@@ -57,6 +60,9 @@ describe('personal dashboard', () => {
     expect(wrapper.text()).toContain('已过约定时间')
     expect(wrapper.text()).toContain('共 11 条')
     expect(wrapper.text()).toContain('共 7 条')
+    expect(wrapper.text()).toContain('我的私人提醒')
+    expect(wrapper.text()).toContain('已到设置时间，等待后端处理')
+    expect(wrapper.find('.today-reminder').attributes('href')).toContain('memory=3')
     expect(wrapper.find('.today-event').attributes('href')).toContain('event=2')
     expect(wrapper.find('.today-commitment').attributes('href')).toContain('commitment=4')
     expect(wrapper.find('.recent-memory-link').attributes('href')).toContain('memory=3')

@@ -144,6 +144,9 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
+        <RouterLink to="/reminders" class="card account-link"><span class="section-heading"><strong>我的私人提醒</strong>
+          <span class="badge">只提醒自己</span></span>
+          <span class="muted">查看待触发、已触发和已取消的设置　↗</span></RouterLink>
         <RouterLink to="/commitments" class="card account-link"><span class="section-heading"><strong>我的承诺</strong>
           <span class="badge">{{ session.user.stats.openCommitmentCount }} 条进行中</span></span>
           <span class="muted">看看自己愿意做的下一步　↗</span></RouterLink>

@@ -106,6 +106,15 @@ public interface ConnectionMapper {
             """)
     int unshareCommitments(@Param("connectionId") long connectionId);
 
+    @Update("""
+            UPDATE calendar_event SET share_title = FALSE, version = version + 1,
+                updated_at = UTC_TIMESTAMP(6)
+            WHERE kind = 'PERSONAL' AND owner_id IN (#{userAId}, #{userBId})
+              AND share_title = TRUE
+            """)
+    int clearPersonalEventTitles(@Param("userAId") long userAId,
+                                 @Param("userBId") long userBId);
+
     @Delete("DELETE FROM memory_comment WHERE connection_id = #{connectionId}")
     int deleteComments(@Param("connectionId") long connectionId);
 

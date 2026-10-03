@@ -113,6 +113,8 @@ public class ConnectionService {
         if (lockedCaller.getActiveConnectionId() != null || inviter.getActiveConnectionId() != null) {
             throw connected();
         }
+        // An event title approved for an earlier connection must not become visible to this one.
+        connections.clearPersonalEventTitles(low, high);
         PairConnection connection = new PairConnection();
         connection.setUserAId(low);
         connection.setUserBId(high);

@@ -179,6 +179,12 @@ small { font-size: 12px; }
 .avatar-choice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .avatar-choice:focus-within { outline: 3px solid #a9bf9f; }
 .disabled-setting { display: flex; align-items: center; gap: 8px; color: var(--muted); margin-top: 17px; }
+.connection-members { display: grid; gap: 9px; margin-top: 14px; }
+.connection-members > p { display: flex; justify-content: space-between; gap: 8px; padding: 9px 12px; border-radius: 9px; background: #f3f5ee; font-weight: 700; }
+.connection-members small { color: var(--muted); font-weight: 400; }
+.token-row, .connection-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.token-row input { flex: 1 1 180px; min-width: 0; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
+.connection-card { min-width: 0; }
 
 .memory-intro { display: flex; align-items: center; gap: 15px; border: 1px solid #e0e9d9; border-radius: 15px; background: #edf3e8; padding: 15px 19px; color: #52735a; margin-bottom: 21px; }
 .memory-intro-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; flex: none; background: #e1ebda; font-size: 25px; }

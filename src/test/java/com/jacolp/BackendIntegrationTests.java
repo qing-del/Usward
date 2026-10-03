@@ -367,6 +367,50 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void eventTitleConsentDoesNotCarryAcrossConnections() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode event = JSON.readTree(alice.write("POST", "/events", eventBody("Private plan",
+                "BUSY", "2026-09-28T09:00:00Z", "2026-09-28T10:00:00Z", true)).body());
+        String eventId = event.path("id").asText();
+
+        connect(alice, bob);
+        JsonNode afterBind = JSON.readTree(alice.call("GET", "/events/" + eventId, null, null).body());
+        assertFalse(afterBind.path("shareTitle").asBoolean());
+        assertEquals("1", afterBind.path("version").asText());
+
+        JsonNode shared = JSON.readTree(alice.write("PATCH", "/events/" + eventId,
+                "{\"expectedVersion\":\"1\",\"shareTitle\":true}").body());
+        assertEquals("2", shared.path("version").asText());
+        JsonNode me = JSON.readTree(alice.call("GET", "/me", null, null).body());
+        alice.write("PATCH", "/me", "{\"expectedVersion\":\"" + me.path("version").asText()
+                + "\",\"shareAvailability\":true}");
+        String query = "/availability?from=2026-09-27T16:00:00Z&to=2026-09-28T16:00:00Z"
+                + "&timezone=Asia/Shanghai";
+        assertEquals("Private plan", JSON.readTree(bob.call("GET", query, null, null).body())
+                .path("blocks").get(0).path("title").asText());
+
+        JsonNode connection = JSON.readTree(alice.call("GET", "/connection", null, null).body());
+        alice.write("POST", "/connection/end", "{\"expectedVersion\":\""
+                + connection.path("connection").path("version").asText() + "\"}");
+        JsonNode afterEnd = JSON.readTree(alice.call("GET", "/events/" + eventId, null, null).body());
+        assertFalse(afterEnd.path("shareTitle").asBoolean());
+        assertEquals("3", afterEnd.path("version").asText());
+        assertEquals(409, alice.write("PATCH", "/events/" + eventId,
+                "{\"expectedVersion\":\"2\",\"title\":\"Stale edit\"}").statusCode());
+
+        connect(alice, bob);
+        me = JSON.readTree(alice.call("GET", "/me", null, null).body());
+        alice.write("PATCH", "/me", "{\"expectedVersion\":\"" + me.path("version").asText()
+                + "\",\"shareAvailability\":true}");
+        JsonNode nextView = JSON.readTree(bob.call("GET", query, null, null).body());
+        assertTrue(nextView.path("sharingEnabled").asBoolean());
+        assertTrue(nextView.path("blocks").get(0).path("title").isNull());
+    }
+
+    @Test
     void availabilityUsesEventTimezoneForDstAndAcceptsSevenFortyTwoNinetyThreeDays() throws Exception {
         Browser alice = new Browser();
         Browser bob = new Browser();

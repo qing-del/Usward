@@ -45,5 +45,6 @@ public class ConnectionLifecycleService {
         connections.deleteNotificationSettings(connectionId);
         connections.unshareCards(connectionId);
         connections.unshareCommitments(connectionId);
+        connections.clearPersonalEventTitles(userAId, userBId);
     }
 }

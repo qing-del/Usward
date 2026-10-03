@@ -3,6 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import Avatar from '../components/Avatar.vue'
+import ConnectionPanel from '../components/ConnectionPanel.vue'
 import { ApiError, errorMessage, request } from '../api'
 import { clearSession, logout, session, updateUser } from '../session'
 import type { AvatarStyle, Me } from '../types'
@@ -144,6 +145,7 @@ async function signOut() {
         </form>
       </section>
       <div class="settings-side">
+        <ConnectionPanel />
         <RouterLink to="/notifications" class="card account-link"><span class="section-heading"><strong>站内通知</strong>
           <span class="badge">查看收件箱</span></span>
           <span class="muted">查看提醒留下的站内消息　↗</span></RouterLink>

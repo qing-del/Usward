@@ -7,6 +7,8 @@ import ReminderEditor from '../components/ReminderEditor.vue'
 import ReminderDraftFields from '../components/ReminderDraftFields.vue'
 import ReminderRecovery from '../components/ReminderRecovery.vue'
 import { ApiError, errorMessage } from '../api'
+import { blocksOnDay, getAvailability } from '../availability'
+import type { AvailabilityBlock, AvailabilityView, AvailabilitySlice } from '../availability'
 import { availabilityLabels, createEvent, deleteEvent, eventsOnDay, getCalendar, getEvent,
   patchEvent } from '../calendar'
 import type { CalendarEvent } from '../calendar'
@@ -16,10 +18,20 @@ import { eventWriteValues } from '../eventWrite'
 import type { EventDraft } from '../eventWrite'
 import { session } from '../session'
 import { useCreatedReminder } from '../useCreatedReminder'
-import { addDays, calendarBounds, daysBetween, localCandidates, mondayOf, offsetAt, today,
+import { addDays, calendarBounds, daysBetween, localCandidates, mondayOf, offsetAt, startOfDay, today,
   toLocal } from '../time'
 
 type Mode = 'agenda' | 'week' | 'month' | 'range'
+type Scope = 'mine' | 'partner'
+interface DisplayItem {
+  key: string
+  kind: Scope
+  title: string
+  when: string
+  caption: string
+  eventId?: string
+  block?: AvailabilityBlock
+}
 const route = useRoute()
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
 const mailAvailable = computed(() => !!session.user?.mailReminderAvailable && !!session.user.notificationEmail)
@@ -40,6 +52,7 @@ const initialDay = (() => {
 const selectedDay = ref(initialDay)
 const mode = ref<Mode>(typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 600px)').matches
   ? 'agenda' : 'week')
+const scope = ref<Scope>('mine')
 const rangeStart = ref(initialDay)
 const rangeEndExclusive = ref(addDays(initialDay, 7))
 const rangeDraftStart = ref(initialDay)
@@ -47,6 +60,8 @@ const rangeDraftLast = ref(addDays(initialDay, 6))
 const rangeDialog = ref(false)
 const rangeError = ref('')
 const events = ref<CalendarEvent[]>([])
+const availability = ref<AvailabilityView | null>(null)
+const selectedBlock = ref<AvailabilityBlock | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const detailOpen = ref(false)
@@ -113,25 +128,72 @@ async function load() {
   loading.value = true
   loadError.value = ''
   events.value = []
+  availability.value = null
+  if (scope.value === 'partner' && !currentConnection.value) {
+    loading.value = false
+    return
+  }
   try {
-    const result = await getCalendar(visibleRange.value.from, visibleRange.value.to,
-      timezone.value, controller.signal)
-    if (current === sequence) events.value = result.items
+    if (scope.value === 'partner') {
+      const result = await getAvailability(visibleRange.value.from, visibleRange.value.to,
+        timezone.value, controller.signal)
+      if (current === sequence) availability.value = result
+    } else {
+      const result = await getCalendar(visibleRange.value.from, visibleRange.value.to,
+        timezone.value, controller.signal)
+      if (current === sequence) events.value = result.items
+    }
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') return
     if (current === sequence) loadError.value = errorMessage(cause)
   } finally { if (current === sequence) loading.value = false }
 }
-watch([() => visibleRange.value.from, () => visibleRange.value.to, timezone], load, { immediate: true })
-onBeforeUnmount(() => controller?.abort())
+watch([() => visibleRange.value.from, () => visibleRange.value.to, timezone, scope], load, { immediate: true })
+watch(() => currentConnection.value?.id, () => { if (scope.value === 'partner') void load() })
+function onVisible() {
+  if (document.visibilityState === 'visible') void loadConnection()
+}
+onBeforeUnmount(() => {
+  controller?.abort()
+  document.removeEventListener('visibilitychange', onVisible)
+})
 onMounted(() => {
+  document.addEventListener('visibilitychange', onVisible)
   if (route.query.new === '1') openCreate()
   else if (typeof route.query.event === 'string' && /^[1-9]\d*$/.test(route.query.event)) {
     openEvent(route.query.event)
   }
 })
 
-function itemsOn(day: string): CalendarEvent[] { return eventsOnDay(events.value, day, timezone.value) }
+function blockChipTime(slice: AvailabilitySlice, day: string): string {
+  const from = startOfDay(day, timezone.value)
+  const to = startOfDay(addDays(day, 1), timezone.value)
+  if (slice.startsAt === from && slice.endsAt === to) return '全天'
+  return `${momentLabel(slice.startsAt)}–${slice.endsAt === to ? '24:00' : momentLabel(slice.endsAt)}`
+}
+function itemsOn(day: string): DisplayItem[] {
+  if (scope.value === 'partner') {
+    return blocksOnDay(availability.value?.blocks ?? [], day, timezone.value).map(slice => ({
+      key: slice.opaqueId, kind: 'partner', title: slice.title ?? availabilityLabels[slice.status],
+      when: blockChipTime(slice, day),
+      caption: `${availabilityLabels[slice.status]} · ${slice.title ? '对方主动公开标题' : '仅展示忙闲'}`,
+      block: slice.original,
+    }))
+  }
+  return eventsOnDay(events.value, day, timezone.value).map(event => ({
+    key: event.id, kind: 'mine', title: event.title, when: chipTime(event),
+    caption: event.offlineConfirmedAt ? '由我记录，线下确认' : '我的个人安排', eventId: event.id,
+  }))
+}
+function openItem(item: DisplayItem) {
+  if (item.kind === 'partner' && item.block) selectedBlock.value = item.block
+  else if (item.eventId) void openEvent(item.eventId)
+}
+function blockTimeLabel(instant: string): string {
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: timezone.value, year: 'numeric',
+    month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    timeZoneName: 'shortOffset' }).format(new Date(instant))
+}
 function dayLabel(day: string, options: Intl.DateTimeFormatOptions = { month: 'long', day: 'numeric' }): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', ...options }).format(new Date(`${day}T12:00:00Z`))
 }
@@ -283,7 +345,8 @@ async function saveEvent() {
     eventFormOpen.value = false
     detailOpen.value = true
     latestVersion.value = null
-    await load()
+    if (scope.value === 'partner') scope.value = 'mine'
+    else await load()
     if (creating) {
       const reminder = await applyCreatedReminder(saved.id, reminderPlan)
       if (reminder) detail.value = { ...saved, myReminder: reminder }
@@ -320,7 +383,8 @@ async function removeEvent() {
     detailOpen.value = false
     detail.value = null
     confirmDelete.value = false
-    await load()
+    if (scope.value === 'partner') scope.value = 'mine'
+    else await load()
   } catch (cause) {
     detailError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
@@ -334,7 +398,7 @@ async function removeEvent() {
   <AppShell>
     <div class="page-heading"><div><span class="eyebrow">TIME FOR MYSELF</span>
       <h1 class="serif">为时间，留一点余地。</h1>
-      <p class="subtitle">自己的安排好好记；目前这里显示的都是私人日程。</p></div>
+      <p class="subtitle">自己的安排好好记；连接后也能看对方主动分享的忙闲。</p></div>
       <button class="btn primary" @click="openCreate">＋ 个人安排</button></div>
     <div class="calendar-layout"><section class="calendar-main">
       <div class="calendar-toolbar"><div class="calendar-nav">
@@ -346,38 +410,56 @@ async function removeEvent() {
           <button v-for="entry in ([['agenda','日程'],['week','周'],['month','月'],['range','范围']] as const)"
             :key="entry[0]" class="tab" :aria-pressed="mode === entry[0]"
             @click="entry[0] === 'range' ? openRange() : mode = entry[0]">{{ entry[1] }}</button></div></div>
-      <div class="calendar-controls"><span class="badge green">我的安排</span>
-        <button class="text-button" @click="openRange">选择日期范围 · 最多 93 天</button></div>
+      <div class="calendar-controls"><div class="filter-chips" aria-label="日历内容">
+          <button class="filter-chip" :aria-pressed="scope === 'mine'" @click="scope = 'mine'">我的安排</button>
+          <button v-if="currentConnection || scope === 'partner'" class="filter-chip"
+            :aria-pressed="scope === 'partner'" @click="scope = 'partner'">对方忙闲</button>
+        </div><button class="text-button" @click="openRange">选择日期范围 · 最多 93 天</button></div>
+      <div v-if="scope === 'partner' && currentConnection" class="inline-note mb-12">
+        仅展示对方主动开放的时间与状态，标题还需逐条公开。空白时间是未标注，不能推断为有空。
+        <button class="text-button" :disabled="connectionLoading" @click="loadConnection">刷新连接状态</button></div>
       <div class="card calendar-board">
-        <div v-if="loading" class="loading-state" role="status">正在查看日历…</div>
+        <div v-if="loading" class="loading-state" role="status">正在查看{{ scope === 'partner' ? '对方忙闲' : '日历' }}…</div>
+        <div v-else-if="scope === 'partner' && connectionError" class="empty-state">
+          <p class="form-error" role="alert">连接状态暂不可确认：{{ connectionError }}</p>
+          <button class="btn secondary mt-16" @click="loadConnection">重新读取</button></div>
         <div v-else-if="loadError" class="empty-state"><p class="form-error" role="alert">{{ loadError }}</p>
           <button class="btn secondary mt-16" @click="load">重试</button></div>
+        <div v-else-if="scope === 'partner' && !currentConnection" class="empty-state">
+          <h3>目前没有有效连接</h3><p>连接后，才能查看对方主动分享的忙闲。</p>
+          <RouterLink to="/me" class="btn secondary mt-16">查看连接</RouterLink></div>
+        <div v-else-if="scope === 'partner' && availability && !availability.sharingEnabled" class="empty-state">
+          <h3>对方尚未开启忙闲共享</h3><p>空白日历不代表对方有空。</p></div>
+        <div v-else-if="scope === 'partner' && availability && availability.blocks.length === 0" class="empty-state">
+          <h3>这一段时间没有标注</h3><p>对方已开启共享，但当前范围没有时间块；未标注不代表有空。</p></div>
         <div v-else-if="mode === 'agenda' || mode === 'range'" class="agenda-list">
           <section v-for="day in visibleDays" :key="day" class="agenda-day">
             <div class="agenda-date"><strong>{{ dayLabel(day, { day: 'numeric' }) }}</strong>
               <span>{{ dayLabel(day, { weekday: 'short' }) }}</span><small v-if="day === today(timezone)">今天</small></div>
             <div class="agenda-events"><template v-if="itemsOn(day).length">
-              <button v-for="event in itemsOn(day)" :key="event.id" class="calendar-event"
-                @click="openEvent(event.id)"><span>{{ chipTime(event) }}</span><strong>{{ event.title }}</strong>
-                <small>{{ event.offlineConfirmedAt ? '由我记录，线下确认' : '我的个人安排' }}</small></button>
-            </template><p v-else class="unmarked">没有安排 · 给日常留一点余地</p></div></section></div>
+              <button v-for="item in itemsOn(day)" :key="item.key" class="calendar-event"
+                :class="{ partner: item.kind === 'partner' }" @click="openItem(item)">
+                <span>{{ item.when }}</span><strong>{{ item.title }}</strong><small>{{ item.caption }}</small></button>
+            </template><p v-else class="unmarked">{{ scope === 'partner' ? '未标注 · 不能推断为有空' : '没有安排 · 给日常留一点余地' }}</p></div></section></div>
         <div v-else-if="mode === 'week'" class="week-scroll"><div class="week-grid">
           <section v-for="day in visibleDays" :key="day" class="week-day">
             <button class="week-day-head" :class="{ current: day === today(timezone) }" @click="chooseDay(day)">
               <span>{{ dayLabel(day, { weekday: 'short' }) }}</span><strong>{{ dayLabel(day, { day: 'numeric' }) }}</strong></button>
-            <div class="week-day-events"><button v-for="event in itemsOn(day)" :key="event.id" class="calendar-event compact"
-              @click="openEvent(event.id)"><small>{{ chipTime(event) }}</small><strong>{{ event.title }}</strong></button>
-              <p v-if="!itemsOn(day).length" class="unmarked">未安排</p></div></section></div></div>
+            <div class="week-day-events"><button v-for="item in itemsOn(day)" :key="item.key" class="calendar-event compact"
+              :class="{ partner: item.kind === 'partner' }" @click="openItem(item)">
+              <small>{{ item.when }}</small><strong>{{ item.title }}</strong></button>
+              <p v-if="!itemsOn(day).length" class="unmarked">{{ scope === 'partner' ? '未标注' : '未安排' }}</p></div></section></div></div>
         <div v-else class="month-grid"><div v-for="label in ['一','二','三','四','五','六','日']" :key="label" class="month-weekday">周{{ label }}</div>
           <div v-for="day in visibleDays" :key="day" class="month-cell"
             :class="{ outside: day.slice(0,7) !== selectedDay.slice(0,7), current: day === today(timezone) }">
-            <button class="month-day-number" :aria-label="`查看${dayLabel(day)}的安排`" @click="chooseDay(day)">{{ Number(day.slice(-2)) }}</button>
-            <button v-for="event in itemsOn(day).slice(0,2)" :key="event.id" class="month-event" @click="openEvent(event.id)">{{ event.title }}</button>
+            <button class="month-day-number" :aria-label="`查看${dayLabel(day)}的${scope === 'partner' ? '忙闲' : '安排'}`" @click="chooseDay(day)">{{ Number(day.slice(-2)) }}</button>
+            <button v-for="item in itemsOn(day).slice(0,2)" :key="item.key" class="month-event"
+              :class="{ partner: item.kind === 'partner' }" @click="openItem(item)">{{ item.title }}</button>
             <button v-if="itemsOn(day).length > 2" class="month-more" @click="chooseDay(day)">还有 {{ itemsOn(day).length - 2 }} 项</button></div></div>
-      </div><div class="calendar-legend"><span>● 我的安排</span><small>{{ timezone }}</small></div>
+      </div><div class="calendar-legend"><span>{{ scope === 'partner' ? '● 对方主动分享的忙闲' : '● 我的安排' }}</span><small>{{ timezone }}</small></div>
     </section><aside class="calendar-aside"><div class="card soft"><h2>属于自己的时间</h2>
-      <p class="muted mt-8">安排默认私密。连接、忙闲展示与共同邀约将在相应后端能力完成后接入。</p>
-      <button class="btn secondary mt-16" @click="openCreate">记一段个人安排</button></div>
+      <p class="muted mt-8">个人安排默认私密。你可在「我的」管理总忙闲开关，在安排中单独选择是否公开标题。</p>
+      <RouterLink to="/me" class="btn secondary mt-16">管理忙闲共享</RouterLink></div>
       <div class="inline-note">不必把每天填满。记下重要的安排，也给日常留一点余地。</div></aside></div>
 
     <BaseDialog :open="rangeDialog" title="选择日历日期范围" @close="rangeDialog = false">
@@ -388,6 +470,11 @@ async function removeEvent() {
         <p v-if="rangeError" class="form-error" role="alert">{{ rangeError }}</p>
         <div class="dialog-actions"><button class="btn secondary" type="button" @click="rangeDialog = false">取消</button>
           <button class="btn primary" type="submit">查看安排</button></div></form>
+    </BaseDialog>
+    <BaseDialog :open="!!selectedBlock" :title="selectedBlock?.title || '对方忙闲'" @close="selectedBlock = null">
+      <template v-if="selectedBlock"><div class="detail-meta"><span class="badge purple">{{ availabilityLabels[selectedBlock.status] }}</span></div>
+        <p class="detail-body">{{ blockTimeLabel(selectedBlock.startsAt) }} — {{ blockTimeLabel(selectedBlock.endsAt) }}</p>
+        <div class="inline-note mt-16">这里只显示对方主动共享的忙闲。未公开的标题、地点和私人备注不可查看；未标注不代表有空。</div></template>
     </BaseDialog>
     <BaseDialog :open="detailOpen" :title="detail?.title || '个人安排'" :busy="deletePending" @close="closeEvent">
       <div v-if="detailLoading" class="loading-state" role="status">正在读取安排…</div>

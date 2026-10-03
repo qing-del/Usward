@@ -113,7 +113,7 @@ async function save() {
     notice.value = draft.mode === 'NONE' ? '提醒已取消。' : '私人提醒已保存。'
   } catch (cause) {
     error.value = errorMessage(cause)
-    if (cause instanceof ApiError && cause.status === 409) {
+    if (cause instanceof ApiError && cause.code === 'REMINDER_REVISION_CONFLICT') {
       await loadLatest('提醒修订已变化。你的时间和方式仍保留，请核对最新状态。')
     } else if (cause instanceof ApiError && cause.code === 'NETWORK_ERROR') {
       const fetched = await loadLatest('连接中断。请核对服务端状态，再决定是否重试。')

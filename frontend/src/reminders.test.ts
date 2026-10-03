@@ -91,4 +91,23 @@ describe('private reminder controls', () => {
     expect(JSON.parse(writes[1]![1].body).expectedRevision).toBe('9007199254740995')
     wrapper.unmount()
   })
+
+  it('does not mislabel an unavailable mail mode as a revision conflict', async () => {
+    session.user = { ...user, notificationEmail: 'alice@example.com', mailReminderAvailable: true }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(path.endsWith('/auth/csrf')
+      ? json({ headerName: 'X-CSRF-TOKEN', token: 'token' })
+      : json({ code: 'MAIL_NOT_AVAILABLE', message: '邮件通知尚不可用' }, 409))))
+    const wrapper = mount(ReminderEditor, { props: { resourceType: 'MEMORY_CARD',
+      resourceId: '9', reminder: null } })
+    await wrapper.get('button').trigger('click')
+    await wrapper.get('select').setValue('IN_APP_AND_MAIL')
+    await wrapper.get('input[type="datetime-local"]').setValue('2026-10-04T10:00')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('邮件通知尚不可用')
+    expect(wrapper.find('.inline-note.peach').exists()).toBe(false)
+    expect((wrapper.get('input[type="datetime-local"]').element as HTMLInputElement).value)
+      .toBe('2026-10-04T10:00')
+    wrapper.unmount()
+  })
 })

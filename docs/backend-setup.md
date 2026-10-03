@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入之前的单人接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读，以及个人今日聚合。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些单人接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
@@ -28,7 +28,7 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 私密记忆卡片使用 `POST /memories` 创建、`GET /memories/{id}` 读取、`PATCH /memories/{id}` 编辑、`POST /memories/{id}/archive` 归档、`POST /memories/{id}/restore` 恢复、`DELETE /memories/{id}` 软删除。写请求使用 JSON，创建至少提供非空白的 `body`；来源类型默认 `INTERPRETATION`。编辑及状态操作必须传字符串形式的 `expectedVersion`，例如 `{"expectedVersion":"0","body":"更新后的正文"}`；删除的版本也放在请求体。每次成功写入返回递增的版本，删除返回 204；旧版本返回 409，访问他人或已删除的卡片返回 404。
 
-`GET /memories` 支持 `page`、`size`、`scope`、`archived`、`keyword`、`category`、`tag`、`sort`。当前仅实现个人卡片，因此 `scope=PARTNER` 返回空列表；查询归档卡片需显式使用 `scope=MINE&archived=true`。列表摘要不含正文，`total` 与 `availableTags` 基于完整的当前账号可见结果计算。分享、评论和通知读取接口仍待实现。
+`GET /memories` 支持 `page`、`size`、`scope`、`archived`、`keyword`、`category`、`tag`、`sort`。当前仅实现个人卡片，因此 `scope=PARTNER` 返回空列表；查询归档卡片需显式使用 `scope=MINE&archived=true`。列表摘要不含正文，`total` 与 `availableTags` 基于完整的当前账号可见结果计算。分享和评论接口仍待实现。
 
 `PATCH /me` 使用当前 `GET /me` 中的字符串 `version` 作为 `expectedVersion`，可修改昵称、`avatarStyle`、IANA `timezone`、`notificationEmail` 和 `shareAvailability`。邮箱使用单个地址，传 `null` 可清空；尚未提供 SMTP，因此 `mailReminderAvailable` 始终为 false。没有有效连接时不能开启忙闲共享。`POST /me/password` 接收 `{"oldPassword":"…","newPassword":"…"}`，成功返回 204 并使该账号全部 Session 失效；随后重新获取 CSRF 并登录。
 

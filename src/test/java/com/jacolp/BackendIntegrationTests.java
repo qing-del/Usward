@@ -16,6 +16,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.concurrent.CountDownLatch;
@@ -303,6 +304,148 @@ class BackendIntegrationTests {
                 + "WHERE shared_connection_id IS NOT NULL", Integer.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
                 + "WHERE dedupe_key = 'old-partner' AND invalidated_at IS NOT NULL", Integer.class));
+    }
+
+    @Test
+    void availabilityExposesOnlyMergedBlocksWithStrictTitleRedaction() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String query = "/availability?from=2026-09-27T16:00:00Z&to=2026-09-28T16:00:00Z"
+                + "&timezone=Asia/Shanghai";
+        JsonNode disconnected = JSON.readTree(alice.call("GET", query, null, null).body());
+        assertFalse(disconnected.path("sharingEnabled").asBoolean());
+        assertEquals(0, disconnected.path("blocks").size());
+        connect(alice, bob);
+        assertFalse(JSON.readTree(alice.call("GET", query, null, null).body())
+                .path("sharingEnabled").asBoolean());
+        JsonNode me = JSON.readTree(bob.call("GET", "/me", null, null).body());
+        assertEquals(200, bob.write("PATCH", "/me", "{\"expectedVersion\":\""
+                + me.path("version").asText() + "\",\"shareAvailability\":true}").statusCode());
+        JsonNode empty = JSON.readTree(alice.call("GET", query, null, null).body());
+        assertTrue(empty.path("sharingEnabled").asBoolean());
+        assertEquals(0, empty.path("blocks").size());
+
+        JsonNode work = JSON.readTree(bob.write("POST", "/events", eventBody("Work", "BUSY",
+                "2026-09-28T09:00:00Z", "2026-09-28T11:00:00Z", true)).body());
+        bob.write("POST", "/events", eventBody("Chat", "NEGOTIABLE",
+                "2026-09-28T10:00:00Z", "2026-09-28T12:00:00Z", true));
+        bob.write("POST", "/events", eventBody("Secret", "FREE",
+                "2026-09-28T10:30:00Z", "2026-09-28T10:45:00Z", false));
+        bob.write("POST", "/events", eventBody("Private", "FREE",
+                "2026-09-28T12:00:00Z", "2026-09-28T13:00:00Z", false));
+        alice.write("POST", "/events", eventBody("Alice-only", "BUSY",
+                "2026-09-28T09:00:00Z", "2026-09-28T13:00:00Z", true));
+        bob.write("POST", "/events", eventBody("Before", "BUSY",
+                "2026-09-27T15:00:00Z", "2026-09-27T16:00:00Z", true));
+        bob.write("POST", "/events", eventBody("After", "BUSY",
+                "2026-09-28T16:00:00Z", "2026-09-28T17:00:00Z", true));
+        JsonNode blocks = JSON.readTree(alice.call("GET", query, null, null).body()).path("blocks");
+        assertEquals(4, blocks.size());
+        assertBlock(blocks.get(0), "2026-09-28T09:00:00Z", "2026-09-28T10:00:00Z",
+                "BUSY", "Work");
+        assertBlock(blocks.get(1), "2026-09-28T10:00:00Z", "2026-09-28T11:00:00Z",
+                "BUSY", null);
+        assertBlock(blocks.get(2), "2026-09-28T11:00:00Z", "2026-09-28T12:00:00Z",
+                "NEGOTIABLE", "Chat");
+        assertBlock(blocks.get(3), "2026-09-28T12:00:00Z", "2026-09-28T13:00:00Z",
+                "FREE", null);
+        assertFalse(blocks.get(0).has("id"));
+        assertFalse(blocks.get(0).has("location"));
+        assertFalse(blocks.get(0).has("note"));
+        assertFalse(blocks.get(0).has("ownerId"));
+        assertFalse(blocks.get(0).path("opaqueId").asText().equals(work.path("id").asText()));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notification", Integer.class));
+        assertEquals(400, alice.call("GET", query.replace("Asia/Shanghai", "Bad/Zone"),
+                null, null).statusCode());
+        JsonNode latest = JSON.readTree(bob.call("GET", "/me", null, null).body());
+        bob.write("PATCH", "/me", "{\"expectedVersion\":\""
+                + latest.path("version").asText() + "\",\"shareAvailability\":false}");
+        assertFalse(JSON.readTree(alice.call("GET", query, null, null).body())
+                .path("sharingEnabled").asBoolean());
+    }
+
+    @Test
+    void availabilityUsesEventTimezoneForDstAndAcceptsSevenFortyTwoNinetyThreeDays() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        connect(alice, bob);
+        JsonNode me = JSON.readTree(bob.call("GET", "/me", null, null).body());
+        bob.write("PATCH", "/me", "{\"expectedVersion\":\""
+                + me.path("version").asText() + "\",\"shareAvailability\":true}");
+        bob.write("POST", "/events", """
+                {"title":"Spring","allDay":true,"startDate":"2026-03-08",
+                 "endDateExclusive":"2026-03-09","eventTimezone":"America/New_York",
+                 "availability":"BUSY","shareTitle":true,"note":"Never share note"}
+                """);
+        bob.write("POST", "/events", """
+                {"title":"Fall","allDay":true,"startDate":"2026-11-01",
+                 "endDateExclusive":"2026-11-02","eventTimezone":"America/New_York",
+                 "availability":"BUSY","shareTitle":true}
+                """);
+        JsonNode spring = JSON.readTree(alice.call("GET", availabilityQuery(
+                LocalDate.of(2026, 3, 7), 7, "America/New_York"), null, null).body());
+        assertEquals(1, spring.path("blocks").size());
+        JsonNode springBlock = spring.path("blocks").get(0);
+        assertBlock(springBlock, "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z",
+                "BUSY", "Spring");
+        assertEquals(23, Duration.between(Instant.parse(springBlock.path("startsAt").asText()),
+                Instant.parse(springBlock.path("endsAt").asText())).toHours());
+        for (int days : new int[]{7, 42, 93}) {
+            JsonNode fall = JSON.readTree(alice.call("GET", availabilityQuery(
+                    LocalDate.of(2026, 10, 31), days, "America/New_York"), null, null).body());
+            assertEquals(1, fall.path("blocks").size());
+            assertBlock(fall.path("blocks").get(0), "2026-11-01T04:00:00Z",
+                    "2026-11-02T05:00:00Z", "BUSY", "Fall");
+        }
+        assertEquals(0, JSON.readTree(alice.call("GET", availabilityQuery(
+                LocalDate.of(2026, 11, 2), 1, "America/New_York"), null, null).body())
+                .path("blocks").size());
+        assertEquals(400, alice.call("GET", availabilityQuery(
+                LocalDate.of(2026, 10, 31), 94, "America/New_York"), null, null).statusCode());
+        JsonNode connection = JSON.readTree(alice.call("GET", "/connection", null, null).body());
+        alice.write("POST", "/connection/end", "{\"expectedVersion\":\""
+                + connection.path("connection").path("version").asText() + "\"}");
+        JsonNode afterEnd = JSON.readTree(alice.call("GET", availabilityQuery(
+                LocalDate.of(2026, 10, 31), 7, "America/New_York"), null, null).body());
+        assertFalse(afterEnd.path("sharingEnabled").asBoolean());
+        assertEquals(0, afterEnd.path("blocks").size());
+    }
+
+    private void connect(Browser inviter, Browser recipient) throws Exception {
+        JsonNode invite = JSON.readTree(inviter.write("POST", "/connection-invites", null).body());
+        assertEquals(200, recipient.write("POST", "/connection-invites/accept", "{\"token\":\""
+                + invite.path("token").asText() + "\",\"expectedVersion\":\"0\"}").statusCode());
+    }
+
+    private String eventBody(String title, String status, String from, String to,
+                             boolean shareTitle) {
+        return "{\"title\":\"" + title + "\",\"allDay\":false,\"startsAt\":\"" + from
+                + "\",\"endsAt\":\"" + to + "\",\"eventTimezone\":\"Asia/Shanghai\","
+                + "\"availability\":\"" + status + "\",\"shareTitle\":" + shareTitle
+                + ",\"location\":\"secret location\",\"note\":\"secret note\"}";
+    }
+
+    private String availabilityQuery(LocalDate from, int days, String zoneName) {
+        ZoneId zone = ZoneId.of(zoneName);
+        return "/availability?from=" + from.atStartOfDay(zone).toInstant()
+                + "&to=" + from.plusDays(days).atStartOfDay(zone).toInstant()
+                + "&timezone=" + zoneName;
+    }
+
+    private void assertBlock(JsonNode block, String from, String to, String status, String title) {
+        assertEquals(from, block.path("startsAt").asText());
+        assertEquals(to, block.path("endsAt").asText());
+        assertEquals(status, block.path("status").asText());
+        if (title == null) {
+            assertTrue(block.path("title").isNull());
+        } else {
+            assertEquals(title, block.path("title").asText());
+        }
+        assertTrue(block.path("opaqueId").isTextual());
     }
 
     @Test

@@ -6,6 +6,8 @@
 
 任一方可用 `POST /connection/end` 提交 `{ "expectedVersion": "0" }` 解除当前连接；版本取自最新的 `GET /connection`。解除成功返回空连接和空待发邀请，双方忙闲共享开关会关闭，旧连接的分享关系、评论、设置及失权通知被清理。个人内容保留；旧连接作为历史记录保留在数据库，重新连接也不会继承旧分享。
 
+`GET /availability` 使用与日历相同的 `from`、`to`、`timezone` 参数及 1–93 个当地日的范围校验，只读取当前连接另一方主动开放的个人忙闲。`sharingEnabled=false` 表示未连接或对方未开启，`true` 且空 `blocks` 表示已开启但该范围没有时间块。区段只含不透明 ID、UTC 起止时间、忙闲状态和可公开标题；重叠安排会合并，个人事件 ID、地点和备注不返回。对方通过 `PATCH /me` 开启或关闭 `shareAvailability`，解除连接时自动关闭。
+
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
 ```sh

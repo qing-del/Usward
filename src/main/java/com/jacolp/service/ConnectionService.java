@@ -24,11 +24,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class ConnectionService {
     private final ConnectionMapper connections;
     private final UserMapper users;
+    private final ConnectionLifecycleService lifecycle;
     private final SecureRandom random = new SecureRandom();
 
-    public ConnectionService(ConnectionMapper connections, UserMapper users) {
+    public ConnectionService(ConnectionMapper connections, UserMapper users,
+                             ConnectionLifecycleService lifecycle) {
         this.connections = connections;
         this.users = users;
+        this.lifecycle = lifecycle;
     }
 
     @Transactional(readOnly = true)
@@ -142,6 +145,37 @@ public class ConnectionService {
         return inviteDto(connections.ownedInvite(id, caller.getId()));
     }
 
+    @Transactional
+    public ConnectionDtos.Current end(String username, long expectedVersion) {
+        AppUser caller = required(username, false);
+        if (caller.getActiveConnectionId() == null) {
+            throw connectionMissing();
+        }
+        PairConnection connection = connections.lockActiveConnection(caller.getActiveConnectionId());
+        if (connection == null || !member(connection, caller.getId())) {
+            throw connectionMissing();
+        }
+        AppUser first = users.lockById(connection.getUserAId());
+        AppUser second = users.lockById(connection.getUserBId());
+        if (first == null || second == null
+                || !connection.getId().equals(first.getActiveConnectionId())
+                || !connection.getId().equals(second.getActiveConnectionId())) {
+            throw connectionMissing();
+        }
+        if (connection.getVersion() != expectedVersion) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "连接版本已变化");
+        }
+        lifecycle.end(connection.getId(), first.getId(), second.getId());
+        if (connections.end(connection.getId(), expectedVersion) != 1
+                || users.endConnection(first.getId(), connection.getId()) != 1
+                || users.endConnection(second.getId(), connection.getId()) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "连接版本已变化");
+        }
+        connections.revokePending(first.getId(), -1);
+        connections.revokePending(second.getId(), -1);
+        return new ConnectionDtos.Current(null, null);
+    }
+
     private PairInvite invite(String token) {
         PairInvite row = connections.inviteByHash(hash(token));
         if (row == null) {
@@ -217,5 +251,9 @@ public class ConnectionService {
 
     private ApiException inviteMissing() {
         return new ApiException(HttpStatus.NOT_FOUND, "INVITE_NOT_FOUND", "邀请不存在");
+    }
+
+    private ApiException connectionMissing() {
+        return new ApiException(HttpStatus.NOT_FOUND, "CONNECTION_NOT_FOUND", "连接不存在");
     }
 }

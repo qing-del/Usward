@@ -2,7 +2,9 @@ package com.jacolp.mapper;
 
 import com.jacolp.entity.PairConnection;
 import com.jacolp.entity.PairInvite;
+import java.util.List;
 import org.apache.ibatis.annotations.Insert;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Options;
 import org.apache.ibatis.annotations.Param;
@@ -69,4 +71,44 @@ public interface ConnectionMapper {
 
     @Select("SELECT " + CONNECTION_COLUMNS + " FROM pair_connection WHERE id = #{id} AND status = 'ACTIVE' FOR UPDATE")
     PairConnection lockActiveConnection(@Param("id") long id);
+
+    @Update("""
+            UPDATE pair_connection SET status = 'ENDED', ended_at = UTC_TIMESTAMP(6),
+                version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND status = 'ACTIVE' AND version = #{version}
+            """)
+    int end(@Param("id") long id, @Param("version") long version);
+
+    @Select("SELECT id FROM memory_card WHERE shared_connection_id = #{connectionId} AND owner_id = #{ownerId}")
+    List<Long> sharedCards(@Param("connectionId") long connectionId, @Param("ownerId") long ownerId);
+
+    @Select("SELECT id FROM commitment WHERE shared_connection_id = #{connectionId} AND owner_id = #{ownerId}")
+    List<Long> sharedCommitments(@Param("connectionId") long connectionId, @Param("ownerId") long ownerId);
+
+    @Select("SELECT id FROM calendar_event WHERE connection_id = #{connectionId} AND kind = 'SHARED'")
+    List<Long> sharedEvents(@Param("connectionId") long connectionId);
+
+    @Select("SELECT id FROM expression WHERE connection_id = #{connectionId}")
+    List<Long> expressions(@Param("connectionId") long connectionId);
+
+    @Select("SELECT id FROM calendar_invitation WHERE connection_id = #{connectionId}")
+    List<Long> calendarInvitations(@Param("connectionId") long connectionId);
+
+    @Update("""
+            UPDATE memory_card SET shared_connection_id = NULL, version = version + 1,
+                updated_at = UTC_TIMESTAMP(6) WHERE shared_connection_id = #{connectionId}
+            """)
+    int unshareCards(@Param("connectionId") long connectionId);
+
+    @Update("""
+            UPDATE commitment SET shared_connection_id = NULL, version = version + 1,
+                updated_at = UTC_TIMESTAMP(6) WHERE shared_connection_id = #{connectionId}
+            """)
+    int unshareCommitments(@Param("connectionId") long connectionId);
+
+    @Delete("DELETE FROM memory_comment WHERE connection_id = #{connectionId}")
+    int deleteComments(@Param("connectionId") long connectionId);
+
+    @Delete("DELETE FROM notification_setting WHERE connection_id = #{connectionId}")
+    int deleteNotificationSettings(@Param("connectionId") long connectionId);
 }

@@ -68,6 +68,12 @@ class BackendIntegrationTests {
         jdbc.update("DELETE FROM reminder");
         jdbc.update("DELETE FROM commitment");
         jdbc.update("DELETE FROM calendar_event");
+        jdbc.update("DELETE FROM calendar_invitation");
+        jdbc.update("DELETE FROM expression_reply");
+        jdbc.update("DELETE FROM expression");
+        jdbc.update("DELETE FROM memory_comment");
+        jdbc.update("DELETE FROM notification_setting");
+        jdbc.update("DELETE FROM notification_operation");
         jdbc.update("DELETE FROM pair_invite");
         jdbc.update("DELETE FROM pair_connection");
         jdbc.update("DELETE FROM memory_tag");
@@ -210,6 +216,93 @@ class BackendIntegrationTests {
         assertTrue(connections == 0 || connections == 1);
         assertEquals(connections * 2, jdbc.queryForObject(
                 "SELECT COUNT(*) FROM app_user WHERE active_connection_id IS NOT NULL", Integer.class));
+    }
+
+    @Test
+    void endingConnectionClearsSharedStateWithoutTouchingAuthorsPrivateReminder() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode invitation = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        JsonNode pair = JSON.readTree(bob.write("POST", "/connection-invites/accept",
+                "{\"token\":\"" + invitation.path("token").asText()
+                        + "\",\"expectedVersion\":\"0\"}").body());
+        long pairId = Long.parseLong(pair.path("id").asText());
+        long aliceId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'alice'", Long.class);
+        long bobId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'bob'", Long.class);
+        JsonNode me = JSON.readTree(alice.call("GET", "/me", null, null).body());
+        assertEquals(200, alice.write("PATCH", "/me", "{\"expectedVersion\":\""
+                + me.path("version").asText() + "\",\"shareAvailability\":true}").statusCode());
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"kept private after ending\"}").body());
+        long cardId = Long.parseLong(card.path("id").asText());
+        JsonNode commitment = JSON.readTree(alice.write("POST", "/commitments",
+                "{\"title\":\"kept private\"}").body());
+        long commitmentId = Long.parseLong(commitment.path("id").asText());
+        jdbc.update("UPDATE memory_card SET shared_connection_id = ? WHERE id = ?", pairId, cardId);
+        jdbc.update("UPDATE commitment SET shared_connection_id = ? WHERE id = ?", pairId, commitmentId);
+        jdbc.update("INSERT INTO memory_comment (card_id, connection_id, author_id, body) VALUES (?, ?, ?, 'old comment')",
+                cardId, pairId, bobId);
+        jdbc.update("INSERT INTO notification_setting (user_id, resource_type, resource_id, connection_id) "
+                + "VALUES (?, 'MEMORY_CARD', ?, ?)", bobId, cardId, pairId);
+        JsonNode ownReminder = JSON.readTree(alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2027-01-01T00:00:00Z","expectedRevision":null}
+                """.formatted(cardId)).body());
+        jdbc.update("INSERT INTO reminder (recipient_id, resource_type, resource_id, scheduled_at) "
+                + "VALUES (?, 'MEMORY_CARD', ?, UTC_TIMESTAMP(6) + INTERVAL 1 DAY)", bobId, cardId);
+        jdbc.update("INSERT INTO notification (recipient_id, kind, resource_type, resource_id, message, dedupe_key) "
+                + "VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, 'generic', 'old-partner')", bobId, cardId);
+        jdbc.update("INSERT INTO notification (recipient_id, kind, resource_type, resource_id, message, dedupe_key) "
+                + "VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, 'generic', 'old-owner')", aliceId, cardId);
+        long partnerNotification = jdbc.queryForObject(
+                "SELECT id FROM notification WHERE dedupe_key = 'old-partner'", Long.class);
+        jdbc.update("INSERT INTO notification_delivery "
+                + "(notification_id, source_type, recipient_id, to_address) "
+                + "VALUES (?, 'BUSINESS', ?, 'bob@example.test')", partnerNotification, bobId);
+        assertEquals(409, alice.write("POST", "/connection/end",
+                "{\"expectedVersion\":\"1\"}").statusCode());
+        assertEquals(403, bob.call("POST", "/connection/end",
+                "{\"expectedVersion\":\"0\"}", null).statusCode());
+        JsonNode ended = JSON.readTree(bob.write("POST", "/connection/end",
+                "{\"expectedVersion\":\"0\"}").body());
+        assertTrue(ended.path("connection").isNull());
+        assertTrue(ended.path("currentInvite").isNull());
+        assertEquals(404, alice.write("POST", "/connection/end",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM app_user "
+                + "WHERE active_connection_id IS NULL AND share_availability = FALSE", Integer.class));
+        assertEquals("ENDED", jdbc.queryForObject("SELECT status FROM pair_connection WHERE id = ?",
+                String.class, pairId));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_card "
+                + "WHERE shared_connection_id = ?", Integer.class, pairId));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM commitment "
+                + "WHERE shared_connection_id = ?", Integer.class, pairId));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_comment "
+                + "WHERE connection_id = ?", Integer.class, pairId));
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notification_setting "
+                + "WHERE connection_id = ?", Integer.class, pairId));
+        assertEquals("PENDING", jdbc.queryForObject("SELECT status FROM reminder WHERE id = ?",
+                String.class, Long.parseLong(ownReminder.path("id").asText())));
+        assertEquals("CANCELLED", jdbc.queryForObject("SELECT status FROM reminder "
+                + "WHERE recipient_id = ? AND resource_type = 'MEMORY_CARD' AND resource_id = ?",
+                String.class, bobId, cardId));
+        assertEquals("CANCELLED", jdbc.queryForObject("SELECT status FROM notification_delivery "
+                + "WHERE notification_id = ?", String.class, partnerNotification));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
+                + "WHERE dedupe_key = 'old-partner' AND invalidated_at IS NOT NULL", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
+                + "WHERE dedupe_key = 'old-owner' AND invalidated_at IS NULL", Integer.class));
+        assertEquals(200, alice.call("GET", "/memories/" + cardId, null, null).statusCode());
+        assertEquals(404, bob.call("GET", "/memories/" + cardId, null, null).statusCode());
+        JsonNode nextInvite = JSON.readTree(alice.write("POST", "/connection-invites", null).body());
+        assertEquals(200, bob.write("POST", "/connection-invites/accept", "{\"token\":\""
+                + nextInvite.path("token").asText() + "\",\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_card "
+                + "WHERE shared_connection_id IS NOT NULL", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
+                + "WHERE dedupe_key = 'old-partner' AND invalidated_at IS NOT NULL", Integer.class));
     }
 
     @Test

@@ -46,6 +46,13 @@ public interface UserMapper {
             """)
     int bindConnection(@Param("id") long id, @Param("connectionId") long connectionId);
 
+    @Update("""
+            UPDATE app_user SET active_connection_id = NULL, share_availability = FALSE,
+                version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND active_connection_id = #{connectionId}
+            """)
+    int endConnection(@Param("id") long id, @Param("connectionId") long connectionId);
+
     @Select("""
             SELECT COUNT(*) FROM pair_connection
             WHERE id = #{connectionId} AND status = 'ACTIVE'

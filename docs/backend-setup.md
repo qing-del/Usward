@@ -4,6 +4,8 @@
 
 连接邀请与绑定已提供后端接口；正式前端尚未接入。登录后调用 `POST /connection-invites` 可生成一次性口令，创建响应仅此一次包含 `token`。`GET /connection` 只返回当前连接和本人尚未过期的待发邀请元数据。另一账号通过 `POST /connection-invites/preview` 提交 `{ "token": "…" }` 查看邀请者公开摘要，再通过 `POST /connection-invites/accept` 提交 `{ "token": "…", "expectedVersion": "0" }` 主动接受。邀请者可用 `POST /connection-invites/{id}/revoke` 和 `{ "expectedVersion": "0" }` 撤销；口令不进入 URL，绑定不会自动分享个人内容。所有写操作继续使用登录 Session 的 CSRF 令牌。
 
+任一方可用 `POST /connection/end` 提交 `{ "expectedVersion": "0" }` 解除当前连接；版本取自最新的 `GET /connection`。解除成功返回空连接和空待发邀请，双方忙闲共享开关会关闭，旧连接的分享关系、评论、设置及失权通知被清理。个人内容保留；旧连接作为历史记录保留在数据库，重新连接也不会继承旧分享。
+
 需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表；不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
 ```sh

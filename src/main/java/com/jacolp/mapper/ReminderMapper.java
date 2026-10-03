@@ -101,6 +101,36 @@ public interface ReminderMapper {
     List<Long> lockNotifications(@Param("resourceType") String resourceType,
                                  @Param("resourceId") long resourceId);
 
+    @Select("""
+            SELECT id FROM notification WHERE recipient_id = #{recipientId}
+              AND resource_type = #{resourceType} AND resource_id = #{resourceId}
+              AND invalidated_at IS NULL FOR UPDATE
+            """)
+    List<Long> lockRecipientNotifications(@Param("recipientId") long recipientId,
+                                          @Param("resourceType") String resourceType,
+                                          @Param("resourceId") long resourceId);
+
+    @Update("""
+            UPDATE notification_delivery AS d JOIN notification AS n ON n.id = d.notification_id
+            SET d.status = 'CANCELLED', d.lock_token = NULL, d.lease_until = NULL,
+                d.version = d.version + 1, d.updated_at = UTC_TIMESTAMP(6)
+            WHERE n.recipient_id = #{recipientId} AND n.resource_type = #{resourceType}
+              AND n.resource_id = #{resourceId} AND d.status IN ('QUEUED', 'PROCESSING')
+            """)
+    int cancelRecipientResourceDeliveries(@Param("recipientId") long recipientId,
+                                          @Param("resourceType") String resourceType,
+                                          @Param("resourceId") long resourceId);
+
+    @Update("""
+            UPDATE notification SET invalidated_at = UTC_TIMESTAMP(6),
+                version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE recipient_id = #{recipientId} AND resource_type = #{resourceType}
+              AND resource_id = #{resourceId} AND invalidated_at IS NULL
+            """)
+    int invalidateRecipientNotifications(@Param("recipientId") long recipientId,
+                                         @Param("resourceType") String resourceType,
+                                         @Param("resourceId") long resourceId);
+
     @Update("""
             UPDATE notification_delivery AS d JOIN notification AS n ON n.id = d.notification_id
             SET d.status = 'CANCELLED', d.lock_token = NULL, d.lease_until = NULL,

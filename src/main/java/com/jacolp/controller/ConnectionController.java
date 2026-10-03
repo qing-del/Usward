@@ -60,4 +60,9 @@ public class ConnectionController {
         return connections.revoke(principal.getName(), inviteId,
                 ConnectionDtos.expectedVersion(body));
     }
+
+    @PostMapping("/connection/end")
+    public ConnectionDtos.Current end(@RequestBody Map<String, Object> body, Principal principal) {
+        return connections.end(principal.getName(), ConnectionDtos.expectedVersion(body));
+    }
 }

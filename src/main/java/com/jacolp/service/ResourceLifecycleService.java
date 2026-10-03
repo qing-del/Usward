@@ -29,4 +29,18 @@ public class ResourceLifecycleService {
             reminders.invalidateNotifications(resourceType, resourceId);
         }
     }
+
+    // A share can disappear while the author keeps the underlying private resource.
+    public void revokeAccess(long recipientId, String resourceType, long resourceId) {
+        Reminder reminder = reminders.lockResource(recipientId, resourceType, resourceId);
+        reminders.lockRecipientNotifications(recipientId, resourceType, resourceId);
+        if (reminder != null) {
+            if ("PENDING".equals(reminder.getStatus())) {
+                reminders.cancel(reminder.getId(), recipientId, reminder.getRevision());
+            }
+            reminders.cancelDeliveries(reminder.getId());
+        }
+        reminders.cancelRecipientResourceDeliveries(recipientId, resourceType, resourceId);
+        reminders.invalidateRecipientNotifications(recipientId, resourceType, resourceId);
+    }
 }

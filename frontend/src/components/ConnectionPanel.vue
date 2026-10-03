@@ -44,20 +44,32 @@ function expiresAt(value: string): string {
   }).format(new Date(value))
 }
 
-async function load() {
+async function load(): Promise<boolean> {
   const userId = session.user?.id
-  if (!userId) return
+  if (!userId) return false
   const run = ++sequence
   loading.value = true
   loadError.value = ''
   try {
     const value = await getConnection()
-    if (run !== sequence || session.user?.id !== userId) return
+    if (run !== sequence || session.user?.id !== userId) return false
+    const previousConnection = current.value?.connection
     setCurrent(value)
     if (issued.value && issued.value.id !== value.currentInvite?.id) issued.value = null
     if (!value.connection && endStep.value) endStep.value = 0
+    else if (endStep.value === 2 && previousConnection && value.connection
+      && (previousConnection.id !== value.connection.id
+        || previousConnection.version !== value.connection.version)) {
+      endStep.value = 1
+      endError.value = '连接版本已变化。请重新查看解除影响，再决定是否继续。'
+    }
+    return true
   } catch (cause) {
-    if (run === sequence && session.user?.id === userId) loadError.value = errorMessage(cause)
+    if (run === sequence && session.user?.id === userId) {
+      setCurrent(null)
+      loadError.value = errorMessage(cause)
+    }
+    return false
   } finally {
     if (run === sequence) loading.value = false
   }
@@ -197,7 +209,11 @@ async function acceptReceived() {
     receiveError.value = errorMessage(cause)
     if (cause instanceof ApiError && (cause.status === 409 || cause.code === 'NETWORK_ERROR')) {
       previewNeedsRefresh.value = true
-      await load()
+      const refreshed = await load()
+      if (!refreshed) {
+        receiveError.value = '无法确认连接的最新状态。口令已保留，请重新读取后再查看邀请者。'
+        return
+      }
       if (current.value?.connection) {
         receiveOpen.value = false
         tokenDraft.value = ''
@@ -231,7 +247,12 @@ async function confirmEnd() {
     endError.value = errorMessage(cause)
     if (cause instanceof ApiError && (cause.status === 409 || cause.status === 404
       || cause.code === 'NETWORK_ERROR')) {
-      await load()
+      const refreshed = await load()
+      if (!refreshed) {
+        endStep.value = 1
+        endError.value = '无法确认连接的最新状态。请重新读取后再决定是否解除。'
+        return
+      }
       if (current.value?.connection) {
         endStep.value = 1
         endError.value = '连接状态可能已变化。请重新核对影响，再决定是否解除。'
@@ -250,7 +271,8 @@ defineExpose({ refresh: load })
 <template>
   <section class="card connection-card">
     <div class="section-heading"><h2>{{ connection ? '我们的连接' : '邀请一个重要的人' }}</h2>
-      <span class="badge" :class="connection ? 'green' : ''">{{ connection ? '连接中' : '未连接' }}</span></div>
+      <span class="connection-heading-actions"><span class="badge" :class="connection ? 'green' : ''">{{ connection ? '连接中' : '未连接' }}</span>
+        <button class="text-button" type="button" :disabled="loading" @click="load">刷新状态</button></span></div>
     <p v-if="loading && !current" class="loading-state" role="status">正在读取连接状态…</p>
     <p v-if="loadError" class="form-error" role="alert">{{ loadError }}</p>
     <button v-if="loadError" class="text-button mt-8" :disabled="loading" @click="load">重新读取</button>

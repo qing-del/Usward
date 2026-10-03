@@ -188,6 +188,8 @@ small { font-size: 12px; }
 .token-row, .connection-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .token-row input { flex: 1 1 180px; min-width: 0; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
 .connection-card { min-width: 0; }
+.connection-card .section-heading { flex-wrap: wrap; }
+.connection-heading-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .connection-preview { display: flex; align-items: center; gap: 14px; padding: 15px; border-radius: 12px; background: #f3f5ee; }
 .connection-preview strong { display: block; font-size: 17px; }
 .connection-preview p, .connection-preview small { color: var(--muted); }

@@ -131,4 +131,38 @@ describe('private partner availability', () => {
     expect(wrapper.findAll('.month-event.partner')).toHaveLength(1)
     wrapper.unmount()
   })
+
+  it('clears previously visible blocks when the connection has ended', async () => {
+    let connectionReads = 0
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/connection')) {
+        connectionReads++
+        return Promise.resolve(json({ connection: connectionReads === 1 ? pair : null, currentInvite: null }))
+      }
+      if (url.includes('/calendar?')) return Promise.resolve(json({ items: [], from: '', to: '',
+        timezone: 'Asia/Shanghai', asOf: '' }))
+      if (url.includes('/availability?')) return Promise.resolve(json({ sharingEnabled: true,
+        blocks: [block], from: '', to: '', timezone: 'Asia/Shanghai', asOf: '' }))
+      throw Error(`Unexpected ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/calendar', component: CalendarPage }, { path: '/me', component: CalendarPage },
+    ] })
+    await router.push('/calendar?day=2026-09-29')
+    await router.isReady()
+    const wrapper = mount(CalendarPage, { global: { plugins: [router], stubs: {
+      AppShell: { template: '<div><slot /></div>' },
+      BaseDialog: { props: ['open'], template: '<div v-if="open"><slot /></div>' },
+    } } })
+    await flushPromises()
+    await wrapper.findAll('.filter-chip').find(button => button.text() === '对方忙闲')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.calendar-event.partner')).toHaveLength(1)
+    await wrapper.findAll('button').find(button => button.text() === '刷新连接状态')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.calendar-event.partner')).toHaveLength(0)
+    expect(wrapper.text()).toContain('目前没有有效连接')
+    wrapper.unmount()
+  })
 })

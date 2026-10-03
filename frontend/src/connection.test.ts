@@ -88,6 +88,33 @@ describe('connection invitation issuing', () => {
     wrapper.unmount()
   })
 
+  it('refreshes a sent invitation into a connection without retaining its token', async () => {
+    let connected = false
+    let currentInvite: typeof invite | null = null
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      if (url.endsWith('/connection')) return Promise.resolve(json({ connection: connected ? pair : null,
+        currentInvite: connected ? null : currentInvite }))
+      if (url.endsWith('/connection-invites')) {
+        currentInvite = invite
+        return Promise.resolve(json({ ...invite, token }))
+      }
+      throw Error(`Unexpected ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(ConnectionPanel)
+    await flushPromises()
+    await wrapper.get('button.btn.primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#issued-invite-token').exists()).toBe(true)
+    connected = true
+    await wrapper.findAll('button').find(button => button.text() === '刷新状态')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('#issued-invite-token').exists()).toBe(false)
+    expect(wrapper.text()).toContain('我们的连接')
+    wrapper.unmount()
+  })
+
   it('previews the inviter before accepting with the preview version, and clears drafts on account switch', async () => {
     let connected = false
     const fetchMock = vi.fn().mockImplementation((url: string) => {

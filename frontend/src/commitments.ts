@@ -1,5 +1,6 @@
 import { query, request } from './api'
 import type { CommitmentPatch, CommitmentWrite } from './commitmentWrite'
+import type { ReminderDetail } from './reminders'
 
 export type CommitmentStatus = 'OPEN' | 'DONE' | 'CANCELLED'
 export type CommitmentStatusFilter = CommitmentStatus | 'ALL'
@@ -37,7 +38,7 @@ export interface CommitmentDetail extends Omit<CommitmentSummary, 'owner'> {
   sourceType: CommitmentSourceType | null
   sourceId: string | null
   sourceAvailable: boolean | null
-  myReminder: null
+  myReminder: ReminderDetail | null
 }
 
 export interface CommitmentPage {

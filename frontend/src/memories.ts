@@ -1,4 +1,5 @@
 import { query, request } from './api'
+import type { ReminderDetail } from './reminders'
 
 export type MemoryCategory = 'INTEREST' | 'RECENT_CONCERN' | 'RELATIONSHIP_PREFERENCE'
   | 'BOUNDARY' | 'SHARED_EXPERIENCE' | 'SELF_REFLECTION' | 'OTHER'
@@ -32,7 +33,7 @@ export interface MemoryDetail extends Omit<MemorySummary, 'owner'> {
   sourceDate: string | null
   nextAction: string | null
   archived: boolean
-  myReminder: null
+  myReminder: ReminderDetail | null
   myNotificationSetting: null
 }
 

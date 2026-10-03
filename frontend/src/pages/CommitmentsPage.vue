@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
+import ReminderEditor from '../components/ReminderEditor.vue'
 import { ApiError, errorMessage } from '../api'
 import { cancelCommitment, commitmentDueLabel, commitmentSourceLink, completeCommitment,
   createCommitment, deleteCommitment, getCommitment, listCommitments, patchCommitment,
@@ -119,6 +120,9 @@ async function openDetail(id: string) {
 }
 
 function closeDetail() { detailOpen.value = false; detail.value = null; actionMode.value = null }
+function reminderChanged(value: CommitmentDetail['myReminder']) {
+  if (detail.value) detail.value = { ...detail.value, myReminder: value }
+}
 function dueLabel(item: CommitmentSummary | CommitmentDetail) {
   return commitmentDueLabel(item, timezone.value)
 }
@@ -289,6 +293,8 @@ function adoptLatestActionVersion() {
         <p v-if="detail.sourceType" class="detail-line"><strong>来源</strong>
           <RouterLink v-if="commitmentSourceLink(detail)" class="text-button" :to="commitmentSourceLink(detail)!">查看来源 ↗</RouterLink>
           <span v-else>来源不可用</span></p>
+        <ReminderEditor v-if="detail.status === 'OPEN'" :key="detail.id" resource-type="COMMITMENT"
+          :resource-id="detail.id" :reminder="detail.myReminder" @changed="reminderChanged" />
         <div v-if="actionMode" class="inline-note peach mt-16">
           <p v-if="actionMode === 'complete'">记为完成后，可以留下自己的完成记录。完成不代表所有感受已经解决。</p>
           <p v-else-if="actionMode === 'cancel'">确定取消这条承诺？之后仍可重新打开。</p>

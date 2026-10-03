@@ -1,6 +1,7 @@
 import { query, request } from './api'
 import { addDays, calendarBounds, startOfDay } from './time'
 import type { EventWrite } from './eventWrite'
+import type { ReminderDetail } from './reminders'
 
 export type Availability = 'BUSY' | 'NEGOTIABLE' | 'FREE'
 export const availabilityLabels: Record<Availability, string> = {
@@ -31,7 +32,7 @@ export interface CalendarEvent {
   originInvitationId: null
   pendingChangeInvitationId: null
   cancellationReason: null
-  myReminder: null
+  myReminder: ReminderDetail | null
   myNotificationSetting: null
 }
 

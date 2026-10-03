@@ -114,6 +114,9 @@ small { font-size: 12px; }
 .inline-note { background: #eff4ec; border-radius: 10px; padding: 12px 14px; font-size: 12px; color: #5e765f; }
 .inline-note.peach { background: #fcf0e9; color: #90654e; }
 .inline-note p + button { margin-top: 7px; }
+.reminder-editor { border-top: 1px solid var(--line); margin-top: 22px; padding-top: 20px; }
+.reminder-editor h3 { font-size: 16px; }
+.reminder-editor > .muted { margin-top: 9px; line-height: 1.6; }
 .empty-state { text-align: center; color: var(--muted); padding: 48px 20px; }
 .empty-state .empty-mark { font-size: 29px; color: #9caf8b; }
 .empty-state h3 { color: var(--ink); margin: 7px 0; }

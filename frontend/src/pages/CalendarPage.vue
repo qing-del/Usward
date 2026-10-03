@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
+import ReminderEditor from '../components/ReminderEditor.vue'
 import { ApiError, errorMessage } from '../api'
 import { availabilityLabels, createEvent, deleteEvent, eventsOnDay, getCalendar, getEvent,
   patchEvent } from '../calendar'
@@ -168,6 +169,9 @@ async function openEvent(id: string) {
 }
 
 function closeEvent() { detailOpen.value = false; detail.value = null }
+function reminderChanged(value: CalendarEvent['myReminder']) {
+  if (detail.value) detail.value = { ...detail.value, myReminder: value }
+}
 function onCurrentDay() { selectedDay.value = today(timezone.value); if (mode.value === 'range') mode.value = 'agenda' }
 
 function openCreate() {
@@ -334,6 +338,8 @@ async function removeEvent() {
         <p class="detail-line"><strong>时间状态</strong>{{ availabilityLabels[detail.availability] }}</p>
         <p v-if="detail.location" class="detail-line"><strong>地点</strong>{{ detail.location }}</p>
         <p v-if="detail.note" class="detail-line"><strong>私人备注</strong><span class="detail-body">{{ detail.note }}</span></p>
+        <ReminderEditor :key="detail.id" resource-type="CALENDAR_EVENT" :resource-id="detail.id"
+          :reminder="detail.myReminder" @changed="reminderChanged" />
         <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这段安排将从日历移除。确定删除？</p>
           <button class="btn danger mt-16" :disabled="deletePending" @click="removeEvent">{{ deletePending ? '正在删除…' : '确认删除' }}</button>
           <button class="text-button" @click="confirmDelete = false">再想一下</button></div>

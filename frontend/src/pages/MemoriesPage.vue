@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '../components/AppShell.vue'
 import BaseDialog from '../components/BaseDialog.vue'
+import ReminderEditor from '../components/ReminderEditor.vue'
 import { ApiError, errorMessage } from '../api'
 import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
@@ -205,6 +206,9 @@ function readableDate(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: session.user?.timezone ?? 'Asia/Shanghai',
     year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value))
 }
+function reminderChanged(value: MemoryDetail['myReminder']) {
+  if (detail.value) detail.value = { ...detail.value, myReminder: value }
+}
 </script>
 
 <template>
@@ -262,6 +266,8 @@ function readableDate(value: string): string {
           <p class="detail-line"><strong>来源</strong>{{ sourceLabels[detail.sourceType] }}</p>
           <p v-if="detail.sourceDate" class="detail-line"><strong>来源日期</strong>{{ detail.sourceDate }}</p>
           <p v-if="detail.nextAction" class="detail-line"><strong>下次行动</strong><span class="detail-body">{{ detail.nextAction }}</span></p>
+          <ReminderEditor :key="detail.id" resource-type="MEMORY_CARD" :resource-id="detail.id"
+            :reminder="detail.myReminder" @changed="reminderChanged" />
           <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
             <button class="btn danger mt-16" :disabled="operationPending" @click="removeMemory">确认删除</button>
             <button class="text-button" @click="confirmDelete = false">再想一下</button></div>

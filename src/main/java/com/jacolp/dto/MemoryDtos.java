@@ -12,10 +12,10 @@ public final class MemoryDtos {
     }
 
     public record Detail(String id, String version, Instant createdAt, Instant updatedAt,
-                         String ownerId, String sharedConnectionId, String title, String body,
+                         String ownerId, PublicOwner owner, String sharedConnectionId, String title, String body,
                          String category, List<String> tags, String sourceType, LocalDate sourceDate,
                          String nextAction, Boolean archived, ReminderDtos.Detail myReminder,
-                         Object myNotificationSetting) {
+                         NotificationSettingDtos.FollowUp myNotificationSetting) {
     }
 
     public record Summary(String id, String version, Instant createdAt, Instant updatedAt,

@@ -149,4 +149,28 @@ public interface ReminderMapper {
             """)
     int invalidateNotifications(@Param("resourceType") String resourceType,
                                 @Param("resourceId") long resourceId);
+
+    @Select("""
+            SELECT id FROM notification WHERE resource_type = 'MEMORY_CARD'
+              AND resource_id = #{cardId} AND dedupe_key LIKE 'business:%'
+              AND invalidated_at IS NULL FOR UPDATE
+            """)
+    List<Long> lockCardBusinessNotifications(@Param("cardId") long cardId);
+
+    @Update("""
+            UPDATE notification_delivery AS d JOIN notification AS n ON n.id = d.notification_id
+            SET d.status = 'CANCELLED', d.lock_token = NULL, d.lease_until = NULL,
+                d.version = d.version + 1, d.updated_at = UTC_TIMESTAMP(6)
+            WHERE n.resource_type = 'MEMORY_CARD' AND n.resource_id = #{cardId}
+              AND n.dedupe_key LIKE 'business:%' AND d.status IN ('QUEUED', 'PROCESSING')
+            """)
+    int cancelCardBusinessDeliveries(@Param("cardId") long cardId);
+
+    @Update("""
+            UPDATE notification SET invalidated_at = UTC_TIMESTAMP(6),
+                version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE resource_type = 'MEMORY_CARD' AND resource_id = #{cardId}
+              AND dedupe_key LIKE 'business:%' AND invalidated_at IS NULL
+            """)
+    int invalidateCardBusinessNotifications(@Param("cardId") long cardId);
 }

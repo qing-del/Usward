@@ -2,10 +2,14 @@ package com.jacolp.service;
 
 import com.jacolp.common.ApiException;
 import com.jacolp.dto.MemoryDtos;
+import com.jacolp.dto.MemoryShareRequest;
 import com.jacolp.dto.MemoryWriteRequest;
 import com.jacolp.entity.AppUser;
 import com.jacolp.entity.MemoryCard;
 import com.jacolp.entity.MemoryTag;
+import com.jacolp.entity.NotificationOperation;
+import com.jacolp.entity.PairConnection;
+import com.jacolp.mapper.ConnectionMapper;
 import com.jacolp.mapper.MemoryMapper;
 import com.jacolp.mapper.UserMapper;
 import java.time.Instant;
@@ -26,14 +30,22 @@ public class MemoryService {
     private final ReminderService reminders;
     private final ResourceLifecycleService lifecycle;
     private final MemoryAccessService access;
+    private final ConnectionMapper connections;
+    private final NotificationSettingService settings;
+    private final BusinessNotificationService business;
 
     public MemoryService(MemoryMapper memories, UserMapper users, ReminderService reminders,
-                         ResourceLifecycleService lifecycle, MemoryAccessService access) {
+                         ResourceLifecycleService lifecycle, MemoryAccessService access,
+                         ConnectionMapper connections, NotificationSettingService settings,
+                         BusinessNotificationService business) {
         this.memories = memories;
         this.users = users;
         this.reminders = reminders;
         this.lifecycle = lifecycle;
         this.access = access;
+        this.connections = connections;
+        this.settings = settings;
+        this.business = business;
     }
 
     @Transactional
@@ -105,11 +117,91 @@ public class MemoryService {
 
     @Transactional
     public void delete(String username, long id, long expectedVersion) {
-        AppUser owner = owner(username, true);
-        lockedVersion(id, owner.getId(), expectedVersion);
+        AppUser owner = owner(username);
+        MemoryCard card = lockedVersion(id, owner.getId(), expectedVersion);
+        if (card.getSharedConnectionId() != null) {
+            long partnerId = partnerId(card.getSharedConnectionId(), owner.getId());
+            settings.deleteCard(id);
+            lifecycle.revokeAccess(partnerId, "MEMORY_CARD", id);
+            memories.deleteComments(id);
+        }
         lifecycle.close(owner.getId(), "MEMORY_CARD", id, true);
         changed(memories.softDelete(id, owner.getId(), expectedVersion));
         memories.deleteTags(id);
+    }
+
+    @Transactional
+    public MemoryDtos.Detail share(String username, long id, MemoryShareRequest input,
+                                   Map<String, Object> rawBody, String rawKey) {
+        AppUser author = owner(username);
+        String key = business.key(rawKey);
+        String hash = business.hash("POST", "/api/v1/memories/" + id + "/share", rawBody);
+        NotificationOperation previous = business.previous(author.getId(), key, hash);
+        if (previous != null) {
+            return replayOwner(author.getId(), id);
+        }
+        PairConnection pair = connections.lockActiveConnection(input.connectionId());
+        if (pair == null || !member(pair, author.getId())) {
+            throw notFound();
+        }
+        AppUser first = users.lockById(pair.getUserAId());
+        AppUser second = users.lockById(pair.getUserBId());
+        if (first == null || second == null
+                || !pair.getId().equals(first.getActiveConnectionId())
+                || !pair.getId().equals(second.getActiveConnectionId())) {
+            throw notFound();
+        }
+        previous = business.previous(author.getId(), key, hash);
+        if (previous != null) {
+            return replayOwner(author.getId(), id);
+        }
+        MemoryCard card = memories.lockOwned(id, author.getId());
+        if (card == null) {
+            throw notFound();
+        }
+        if (card.getVersion() != input.expectedVersion()) {
+            throw versionConflict();
+        }
+        if (card.getSharedConnectionId() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "卡片已经分享");
+        }
+        List<String> unavailable = new ArrayList<>();
+        if ("IN_APP_AND_MAIL".equals(input.outgoingMode())) {
+            unavailable.add("OTHER");
+        }
+        if ("IN_APP_AND_MAIL".equals(input.followUpMode())) {
+            unavailable.add("SELF");
+        }
+        if (!unavailable.isEmpty()) {
+            throw new ApiException(HttpStatus.CONFLICT, "MAIL_NOT_AVAILABLE", "邮件通知尚不可用",
+                    Map.of("unavailableDirections", unavailable));
+        }
+        long partnerId = pair.getUserAId().equals(author.getId())
+                ? pair.getUserBId() : pair.getUserAId();
+        changed(memories.share(id, author.getId(), pair.getId(), input.expectedVersion()));
+        settings.initializeCard(id, pair.getId(), author.getId(), partnerId,
+                input.followUpMode());
+        NotificationOperation operation = business.record(author.getId(), key, hash,
+                "MEMORY_SHARE", id, Map.of("cardId", Long.toString(id)));
+        business.notifyRecipient(operation, partnerId, "MEMORY_SHARED",
+                "对方分享了一张记忆卡片，请登录 Usward 查看", input.outgoingMode());
+        return detail(memories.findOwned(id, author.getId()), author.getId());
+    }
+
+    @Transactional
+    public MemoryDtos.Detail unshare(String username, long id, long expectedVersion) {
+        AppUser author = owner(username);
+        MemoryCard card = lockedVersion(id, author.getId(), expectedVersion);
+        if (card.getSharedConnectionId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "卡片尚未分享");
+        }
+        long partnerId = partnerId(card.getSharedConnectionId(), author.getId());
+        settings.deleteCard(id);
+        lifecycle.revokeAccess(partnerId, "MEMORY_CARD", id);
+        lifecycle.revokeCardBusiness(id);
+        memories.deleteComments(id);
+        changed(memories.unshare(id, author.getId(), card.getSharedConnectionId(), expectedVersion));
+        return detail(memories.findOwned(id, author.getId()), author.getId());
     }
 
     @Transactional(readOnly = true)
@@ -172,11 +264,7 @@ public class MemoryService {
     }
 
     private AppUser owner(String username) {
-        return owner(username, false);
-    }
-
-    private AppUser owner(String username, boolean lock) {
-        AppUser owner = lock ? users.lockByUsername(username) : users.findByUsername(username);
+        AppUser owner = users.findByUsername(username);
         if (owner == null) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "AUTH_REQUIRED", "请重新登录");
         }
@@ -184,14 +272,51 @@ public class MemoryService {
     }
 
     private MemoryCard lockedVersion(long id, long ownerId, long expectedVersion) {
-        MemoryCard card = memories.lockOwned(id, ownerId);
+        MemoryCard candidate = memories.findOwned(id, ownerId);
+        if (candidate == null) {
+            throw notFound();
+        }
+        MemoryCard card;
+        if (candidate.getSharedConnectionId() != null) {
+            card = access.lockShared(ownerId, id);
+            if (card == null) {
+                throw versionConflict();
+            }
+        } else {
+            users.lockById(ownerId);
+            card = memories.lockOwned(id, ownerId);
+        }
         if (card == null) {
             throw notFound();
         }
         if (card.getVersion() != expectedVersion) {
-            throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "卡片版本已变化");
+            throw versionConflict();
         }
         return card;
+    }
+
+    private MemoryDtos.Detail replayOwner(long ownerId, long cardId) {
+        MemoryCard card = memories.findOwned(cardId, ownerId);
+        if (card == null) {
+            throw notFound();
+        }
+        return detail(card, ownerId);
+    }
+
+    private long partnerId(long connectionId, long ownerId) {
+        PairConnection pair = connections.activeConnection(connectionId);
+        if (pair == null || !member(pair, ownerId)) {
+            throw versionConflict();
+        }
+        return pair.getUserAId() == ownerId ? pair.getUserBId() : pair.getUserAId();
+    }
+
+    private boolean member(PairConnection pair, long userId) {
+        return pair.getUserAId() == userId || pair.getUserBId() == userId;
+    }
+
+    private ApiException versionConflict() {
+        return new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "卡片版本已变化");
     }
 
     private void changed(int rows) {
@@ -208,13 +333,17 @@ public class MemoryService {
     }
 
     private MemoryDtos.Detail detail(MemoryCard card, long viewerId) {
+        AppUser author = users.findById(card.getOwnerId());
         return new MemoryDtos.Detail(card.getId().toString(), card.getVersion().toString(),
                 utc(card.getCreatedAt()), utc(card.getUpdatedAt()), card.getOwnerId().toString(),
+                new MemoryDtos.PublicOwner(author.getId().toString(), author.getNickname(),
+                        author.getAvatarStyle()),
                 card.getSharedConnectionId() == null ? null : card.getSharedConnectionId().toString(),
                 card.getTitle(), card.getBody(), card.getCategory(), memories.tagsForCard(card.getId()),
                 card.getSourceType(), card.getSourceDate(), card.getNextAction(),
                 card.getOwnerId() == viewerId ? card.isArchived() : null,
-                reminders.forResource(viewerId, "MEMORY_CARD", card.getId()), null);
+                reminders.forResource(viewerId, "MEMORY_CARD", card.getId()),
+                settings.forCard(viewerId, card));
     }
 
     private Instant utc(LocalDateTime value) {

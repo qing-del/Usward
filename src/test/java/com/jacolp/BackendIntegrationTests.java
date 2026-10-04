@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1819,6 +1820,99 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void sharingAndRevokingCardAreVersionedIdempotentAndClearOnlyLostAccess() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode pair = connectResult(alice, bob);
+        String connectionId = pair.path("id").asText();
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"only this card\",\"tags\":[\"shared\"]}").body());
+        String id = card.path("id").asText();
+        String path = "/memories/" + id + "/share";
+        String body = "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\"}";
+        assertEquals(400, alice.write("POST", path, body).statusCode());
+        assertEquals(403, alice.call("POST", path, body, null, UUID.randomUUID().toString())
+                .statusCode());
+        assertEquals(404, alice.writeWithKey("POST", path,
+                "{\"connectionId\":\"999999999\",\"expectedVersion\":\"0\"}",
+                UUID.randomUUID().toString()).statusCode());
+        HttpResponse<String> mail = alice.writeWithKey("POST", path,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"IN_APP_AND_MAIL\","
+                        + "\"followUpMode\":\"IN_APP\"}}", UUID.randomUUID().toString());
+        assertEquals(409, mail.statusCode());
+        assertEquals("OTHER", JSON.readTree(mail.body()).path("details")
+                .path("unavailableDirections").get(0).asText());
+        String key = UUID.randomUUID().toString();
+        HttpResponse<String> firstResponse = alice.writeWithKey("POST", path, body, key);
+        assertEquals(200, firstResponse.statusCode(), firstResponse.body());
+        JsonNode shared = JSON.readTree(firstResponse.body());
+        assertEquals("1", shared.path("version").asText());
+        assertEquals(connectionId, shared.path("sharedConnectionId").asText());
+        assertEquals("1", shared.path("myNotificationSetting").path("version").asText());
+        assertEquals("only this card", JSON.readTree(bob.call("GET", "/memories/" + id,
+                null, null).body()).path("body").asText());
+        assertTrue(JSON.readTree(bob.call("GET", "/memories/" + id, null, null)
+                .body()).path("archived").isNull());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/memories?scope=PARTNER", null, null)
+                .body()).path("total").asInt());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(200, alice.writeWithKey("POST", path, body, key).statusCode());
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification_operation",
+                Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE kind = 'MEMORY_SHARED'",
+                Integer.class));
+        assertEquals(409, alice.writeWithKey("POST", path,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"1\"}", key)
+                .statusCode());
+        assertEquals(409, alice.writeWithKey("POST", path, body, UUID.randomUUID().toString())
+                .statusCode());
+        assertEquals(404, bob.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"1\",\"body\":\"stolen\"}").statusCode());
+
+        long aliceId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'alice'", Long.class);
+        jdbc.update("INSERT INTO notification (recipient_id, kind, resource_type, resource_id, "
+                + "message, dedupe_key) VALUES (?, 'REMINDER_DUE', 'MEMORY_CARD', ?, 'private', 'author-own')",
+                aliceId, Long.parseLong(id));
+        JsonNode ownReminder = JSON.readTree(alice.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2027-01-01T00:00:00Z","expectedRevision":null}
+                """.formatted(id)).body());
+        JsonNode partnerReminder = JSON.readTree(bob.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2027-01-01T00:00:00Z","expectedRevision":null}
+                """.formatted(id)).body());
+        assertEquals(409, alice.write("DELETE", path, "{\"expectedVersion\":\"0\"}")
+                .statusCode());
+        JsonNode unshared = JSON.readTree(alice.write("DELETE", path,
+                "{\"expectedVersion\":\"1\"}").body());
+        assertTrue(unshared.path("sharedConnectionId").isNull());
+        assertEquals("2", unshared.path("version").asText());
+        assertEquals(404, bob.call("GET", "/memories/" + id, null, null).statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals("CANCELLED", jdbc.queryForObject("SELECT status FROM reminder WHERE id = ?",
+                String.class, Long.parseLong(partnerReminder.path("id").asText())));
+        assertEquals("PENDING", jdbc.queryForObject("SELECT status FROM reminder WHERE id = ?",
+                String.class, Long.parseLong(ownReminder.path("id").asText())));
+        assertEquals(1, JSON.readTree(alice.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notification_setting WHERE resource_id = ?",
+                Integer.class, Long.parseLong(id)));
+        JsonNode sharedAgain = JSON.readTree(alice.writeWithKey("POST", path,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"2\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"NONE\"}}", UUID.randomUUID().toString()).body());
+        assertEquals("3", sharedAgain.path("version").asText());
+        assertEquals("NONE", sharedAgain.path("myNotificationSetting").path("followUpMode").asText());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+    }
+
+    @Test
     void paginationSearchAndTagCountsUseTheFullAuthorizedSet() throws Exception {
         Browser alice = new Browser();
         assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
@@ -1962,11 +2056,24 @@ class BackendIntegrationTests {
             return call(method, path, body, csrf());
         }
 
+        HttpResponse<String> writeWithKey(String method, String path, String body, String key)
+                throws Exception {
+            return call(method, path, body, csrf(), key);
+        }
+
         HttpResponse<String> call(String method, String path, String body, JsonNode csrf) throws Exception {
+            return call(method, path, body, csrf, null);
+        }
+
+        HttpResponse<String> call(String method, String path, String body, JsonNode csrf,
+                                  String idempotencyKey) throws Exception {
             HttpRequest.Builder request = HttpRequest.newBuilder()
                     .uri(URI.create("http://127.0.0.1:" + port + "/api/v1" + path));
             if (csrf != null) {
                 request.header(csrf.path("headerName").asText(), csrf.path("token").asText());
+            }
+            if (idempotencyKey != null) {
+                request.header("Idempotency-Key", idempotencyKey);
             }
             if (body == null) {
                 request.method(method, HttpRequest.BodyPublishers.noBody());

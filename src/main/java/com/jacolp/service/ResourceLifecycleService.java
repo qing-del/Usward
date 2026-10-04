@@ -43,4 +43,11 @@ public class ResourceLifecycleService {
         reminders.cancelRecipientResourceDeliveries(recipientId, resourceType, resourceId);
         reminders.invalidateRecipientNotifications(recipientId, resourceType, resourceId);
     }
+
+    // Revoke notifications about a share or deleted comments without hiding the author's own reminder.
+    public void revokeCardBusiness(long cardId) {
+        reminders.lockCardBusinessNotifications(cardId);
+        reminders.cancelCardBusinessDeliveries(cardId);
+        reminders.invalidateCardBusinessNotifications(cardId);
+    }
 }

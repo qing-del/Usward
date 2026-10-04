@@ -116,6 +116,17 @@ public class NotificationSettingService {
         return row == null ? "IN_APP" : row.getFollowUpMode();
     }
 
+    public NotificationSettingDtos.FollowUp forCard(long viewerId, MemoryCard card) {
+        if (card.getSharedConnectionId() == null
+                || !card.getSharedConnectionId().equals(access.activeConnectionId(viewerId))) {
+            return null;
+        }
+        NotificationSetting row = current(viewerId, card.getId(), card.getSharedConnectionId());
+        return new NotificationSettingDtos.FollowUp(
+                row == null ? "IN_APP" : row.getFollowUpMode(),
+                row == null ? null : row.getVersion().toString());
+    }
+
     public NotificationSetting current(long userId, long cardId, long connectionId) {
         NotificationSetting row = settings.card(userId, cardId);
         return row != null && row.getConnectionId() == connectionId ? row : null;

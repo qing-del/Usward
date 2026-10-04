@@ -2,6 +2,7 @@ package com.jacolp.controller;
 
 import com.jacolp.common.ApiException;
 import com.jacolp.dto.MemoryDtos;
+import com.jacolp.dto.MemoryShareRequest;
 import com.jacolp.dto.MemoryWriteRequest;
 import com.jacolp.service.MemoryService;
 import java.security.Principal;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -78,6 +80,20 @@ public class MemoryController {
                                        Principal principal) {
         memories.delete(principal.getName(), id(id), MemoryWriteRequest.expectedVersionOnly(body));
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/share")
+    public MemoryDtos.Detail share(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                   @RequestHeader(value = "Idempotency-Key", required = false) String key,
+                                   Principal principal) {
+        return memories.share(principal.getName(), id(id), MemoryShareRequest.parse(body), body, key);
+    }
+
+    @DeleteMapping("/{id}/share")
+    public MemoryDtos.Detail unshare(@PathVariable String id, @RequestBody Map<String, Object> body,
+                                     Principal principal) {
+        return memories.unshare(principal.getName(), id(id),
+                MemoryWriteRequest.expectedVersionOnly(body));
     }
 
     private long id(String raw) {

@@ -15,13 +15,16 @@ public class ConnectionLifecycleService {
 
     // The caller already holds the connection lock and both account locks.
     public void end(long connectionId, long userAId, long userBId) {
+        connections.deleteNotificationSettings(connectionId);
         resources.revokeAccess(userAId, "PAIR_CONNECTION", connectionId);
         resources.revokeAccess(userBId, "PAIR_CONNECTION", connectionId);
         for (long id : connections.sharedCards(connectionId, userAId)) {
             resources.revokeAccess(userBId, "MEMORY_CARD", id);
+            resources.revokeCardBusiness(id);
         }
         for (long id : connections.sharedCards(connectionId, userBId)) {
             resources.revokeAccess(userAId, "MEMORY_CARD", id);
+            resources.revokeCardBusiness(id);
         }
         for (long id : connections.sharedCommitments(connectionId, userAId)) {
             resources.revokeAccess(userBId, "COMMITMENT", id);
@@ -42,7 +45,6 @@ public class ConnectionLifecycleService {
             resources.revokeAccess(userBId, "CALENDAR_INVITATION", id);
         }
         connections.deleteComments(connectionId);
-        connections.deleteNotificationSettings(connectionId);
         connections.unshareCards(connectionId);
         connections.unshareCommitments(connectionId);
         connections.clearPersonalEventTitles(userAId, userBId);

@@ -8,6 +8,9 @@ public final class NotificationSettingDtos {
                          String version) {
     }
 
+    public record FollowUp(String followUpMode, String version) {
+    }
+
     public record Capabilities(boolean selfMailAvailable, boolean otherMailAvailable,
                                String effectiveOutgoingMode) {
     }

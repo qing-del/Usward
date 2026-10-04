@@ -73,6 +73,27 @@ public interface MemoryMapper {
                     @Param("version") long version, @Param("archived") boolean archived);
 
     @Update("""
+            UPDATE memory_card SET shared_connection_id = #{connectionId},
+              version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND owner_id = #{ownerId} AND deleted_at IS NULL
+              AND shared_connection_id IS NULL AND version = #{version}
+            """)
+    int share(@Param("id") long id, @Param("ownerId") long ownerId,
+              @Param("connectionId") long connectionId, @Param("version") long version);
+
+    @Update("""
+            UPDATE memory_card SET shared_connection_id = NULL,
+              version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND owner_id = #{ownerId} AND deleted_at IS NULL
+              AND shared_connection_id = #{connectionId} AND version = #{version}
+            """)
+    int unshare(@Param("id") long id, @Param("ownerId") long ownerId,
+                @Param("connectionId") long connectionId, @Param("version") long version);
+
+    @Delete("DELETE FROM memory_comment WHERE card_id = #{cardId}")
+    int deleteComments(@Param("cardId") long cardId);
+
+    @Update("""
             UPDATE memory_card SET deleted_at = UTC_TIMESTAMP(6), updated_at = UTC_TIMESTAMP(6),
                    version = version + 1
             WHERE id = #{id} AND owner_id = #{ownerId} AND deleted_at IS NULL

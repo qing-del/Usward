@@ -22,6 +22,29 @@ export interface MemoryShareWrite {
   expectedVersion: string
   notificationPlan: MemorySharePlan
 }
+export interface MemoryNotificationOverride { mode: 'NONE' | 'IN_APP'; token: string }
+export interface MemoryComment {
+  id: string
+  cardId: string
+  authorId: string
+  author: MemorySummary['owner']
+  body: string
+  createdAt: string
+}
+export interface MemoryCommentPage {
+  items: MemoryComment[]
+  total: number
+  page: number
+  size: number
+  hasMore: boolean
+  asOf: string
+}
+export interface MemoryCommentCreated { comment: MemoryComment; memoryVersion: string }
+export interface MemoryCommentWrite {
+  expectedVersion: string
+  body: string
+  notificationOverride?: MemoryNotificationOverride
+}
 
 export const categoryLabels: Record<MemoryCategory, string> = {
   INTEREST: '喜好兴趣', RECENT_CONCERN: '近期关注', RELATIONSHIP_PREFERENCE: '相处偏好',
@@ -102,9 +125,10 @@ export function createMemory(write: MemoryWrite): Promise<MemoryDetail> {
 }
 
 export function patchMemory(id: string, expectedVersion: string, write: MemoryWrite,
-  idempotencyKey: string): Promise<MemoryDetail> {
+  idempotencyKey: string, notificationOverride?: MemoryNotificationOverride): Promise<MemoryDetail> {
   return request<MemoryDetail>('PATCH', `/memories/${encodeURIComponent(id)}`,
-    { expectedVersion, ...write }, { idempotencyKey })
+    { expectedVersion, ...write, ...(notificationOverride ? { notificationOverride } : {}) },
+    { idempotencyKey })
 }
 
 export function setMemoryArchived(id: string, expectedVersion: string, archived: boolean): Promise<MemoryDetail> {
@@ -148,4 +172,17 @@ export function shareMemory(id: string, body: MemoryShareWrite,
 export function unshareMemory(id: string, expectedVersion: string): Promise<MemoryDetail> {
   return request<MemoryDetail>('DELETE', `/memories/${encodeURIComponent(id)}/share`,
     { expectedVersion })
+}
+
+export function listMemoryComments(id: string, page: number, signal?: AbortSignal):
+  Promise<MemoryCommentPage> {
+  return request<MemoryCommentPage>('GET',
+    `/memories/${encodeURIComponent(id)}/comments?${query({ sort: 'CREATED_ASC', page, size: 20 })}`,
+    undefined, { signal })
+}
+
+export function addMemoryComment(id: string, body: MemoryCommentWrite,
+  idempotencyKey: string): Promise<MemoryCommentCreated> {
+  return request<MemoryCommentCreated>('POST', `/memories/${encodeURIComponent(id)}/comments`,
+    body, { idempotencyKey })
 }

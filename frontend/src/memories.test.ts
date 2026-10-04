@@ -126,6 +126,14 @@ describe('private memories', () => {
     const partner = { ...summary, id: '2', ownerId: '2',
       owner: { id: '2', nickname: 'Bob', avatarStyle: 'FLOWER' }, sharedConnectionId: '11' }
     const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.includes('/comments?')) return Promise.resolve(json({ items: [], total: 0,
+        page: 1, size: 20, hasMore: false, asOf: '2026-10-04T00:00:00Z' }))
+      if (path.includes('/notification-capabilities')) return Promise.resolve(json({
+        selfMailAvailable: false, otherMailAvailable: false, effectiveOutgoingMode: 'IN_APP',
+      }))
+      if (path.includes('/notification-settings/MEMORY_CARD/2')) return Promise.resolve(json({
+        resourceType: 'MEMORY_CARD', resourceId: '2', followUpMode: 'IN_APP', version: '1',
+      }))
       if (path.endsWith('/memories/2')) return Promise.resolve(json({ ...partner,
         body: '对方共享的正文', sourceDate: null, nextAction: null, archived: null,
         myReminder: null, myNotificationSetting: { followUpMode: 'IN_APP', version: '1' } }))
@@ -142,6 +150,53 @@ describe('private memories', () => {
     expect(wrapper.text()).toContain('对方共享的正文')
     expect(wrapper.find('.dialog-actions .primary').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('删除')
+    wrapper.unmount()
+  })
+
+  it('lets the author explicitly replace an unavailable historical mail notification on edit', async () => {
+    let patches = 0
+    const shared = { ...detail, version: '7', sharedConnectionId: '23',
+      myNotificationSetting: { followUpMode: 'IN_APP', version: '1' } }
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      if (path.includes('/notification-capabilities')) return Promise.resolve(json({
+        selfMailAvailable: false, otherMailAvailable: false, effectiveOutgoingMode: 'IN_APP_AND_MAIL',
+      }))
+      if (path.includes('/notification-settings/MEMORY_CARD/1')) return Promise.resolve(json({
+        resourceType: 'MEMORY_CARD', resourceId: '1', followUpMode: 'IN_APP', version: '1',
+      }))
+      if (path.includes('/comments?')) return Promise.resolve(json({ items: [], total: 0,
+        page: 1, size: 20, hasMore: false, asOf: '2026-10-04T00:00:00Z' }))
+      if (path.endsWith('/memories/1') && init?.method === 'PATCH') {
+        patches++
+        return Promise.resolve(patches === 1
+          ? json({ code: 'MAIL_NOT_AVAILABLE', message: '邮件不可用',
+            details: { overrideToken: 'edit-token' } }, 409)
+          : json({ ...shared, version: '8', body: '新的原文' }))
+      }
+      if (path.endsWith('/memories/1')) return Promise.resolve(json(shared))
+      return Promise.resolve(json(page([shared], 1)))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { wrapper } = await mountedPage()
+    await flushPromises()
+    await wrapper.get('.memory-open').trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '编辑卡片')!.trigger('click')
+    await flushPromises()
+    await wrapper.get('#memory-body').setValue('新的原文')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(patches).toBe(1)
+    expect((wrapper.get('#memory-body').element as HTMLTextAreaElement).value).toBe('新的原文')
+    await wrapper.get('#memory-edit-override').setValue('NONE')
+    await wrapper.findAll('button').find(button => button.text() === '确认改选并保存卡片')!.trigger('click')
+    await flushPromises()
+    const writes = fetchMock.mock.calls.filter(call => call[1]?.method === 'PATCH')
+    expect(JSON.parse(writes[1]![1].body).notificationOverride)
+      .toEqual({ mode: 'NONE', token: 'edit-token' })
+    expect(writes[1]![1].headers.get('Idempotency-Key'))
+      .toBe(writes[0]![1].headers.get('Idempotency-Key'))
     wrapper.unmount()
   })
 })

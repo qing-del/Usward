@@ -8,11 +8,13 @@ import ReminderDraftFields from '../components/ReminderDraftFields.vue'
 import ReminderRecovery from '../components/ReminderRecovery.vue'
 import MemoryShareControls from '../components/MemoryShareControls.vue'
 import MemoryFollowUpSettings from '../components/MemoryFollowUpSettings.vue'
+import MemoryComments from '../components/MemoryComments.vue'
 import { ApiError, errorMessage } from '../api'
-import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
+import { categoryLabels, createMemory, deleteMemory, getMemory, getMemoryActionCapabilities, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
-import type { MemoryCategory, MemoryDetail, MemoryNotificationSetting, MemoryScope,
-  MemorySummary, MemoryWrite, SourceType } from '../memories'
+import type { MemoryCategory, MemoryDetail, MemoryNotificationCapabilities,
+  MemoryNotificationOverride, MemoryNotificationSetting, MemoryScope, MemorySummary,
+  MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
 import { refreshUnread } from '../unread'
 import { useCreatedReminder } from '../useCreatedReminder'
@@ -47,9 +49,20 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const operationPending = ref(false)
 const shareBusy = ref(false)
+const commentBusy = ref(false)
 const confirmDelete = ref(false)
 const latestVersion = ref<string | null>(null)
+const latestDetail = ref<MemoryDetail | null>(null)
 const editVersion = ref('')
+type EditAttempt = { id: string; version: string; write: MemoryWrite; key: string;
+  sharedConnectionId: string | null; notificationOverride?: MemoryNotificationOverride }
+const editKey = ref<string | null>(null)
+const editUncertain = ref<EditAttempt | null>(null)
+const editRetryVerified = ref(false)
+const editOverrideToken = ref<string | null>(null)
+const editOverrideMode = ref<'IN_APP' | 'NONE'>('IN_APP')
+const editCapabilities = ref<MemoryNotificationCapabilities | null>(null)
+const editCapabilitiesLoading = ref(false)
 const draft = reactive({ title: '', body: '', category: '' as MemoryCategory | '',
   tagsText: '', sourceType: 'INTERPRETATION' as SourceType, sourceDate: '', nextAction: '' })
 const timezone = computed(() => session.user?.timezone ?? 'Asia/Shanghai')
@@ -106,6 +119,15 @@ watch(() => route.query.memory, value => {
   }
 })
 watch(() => [route.query.scope, route.query.archived], () => { view.value = routeView() })
+watch(() => session.reauthRequired, (required, wasRequired) => {
+  if (wasRequired && !required && mode.value === 'edit' && detail.value) {
+    editKey.value = null
+    editUncertain.value = null
+    editRetryVerified.value = false
+    editOverrideToken.value = null
+    void latestForEdit('重新登录后请核对最新卡片和通知方式，再保存输入。')
+  }
+})
 onBeforeUnmount(() => { abort?.abort(); if (searchTimer) clearTimeout(searchTimer) })
 
 function isMine(memory: Pick<MemorySummary, 'ownerId'>): boolean {
@@ -113,11 +135,12 @@ function isMine(memory: Pick<MemorySummary, 'ownerId'>): boolean {
 }
 
 function closeDialog() {
-  if (operationPending.value || shareBusy.value) return
+  if (operationPending.value || shareBusy.value || commentBusy.value) return
   mode.value = null
   detailError.value = ''
   confirmDelete.value = false
   latestVersion.value = null
+  latestDetail.value = null
 }
 
 function newMemory() {
@@ -126,6 +149,7 @@ function newMemory() {
   detail.value = null
   detailError.value = ''
   latestVersion.value = null
+  latestDetail.value = null
   resetCreatedReminder()
   mode.value = 'create'
 }
@@ -152,16 +176,130 @@ function editMemory() {
     nextAction: memory.nextAction ?? '' })
   editVersion.value = memory.version
   latestVersion.value = null
+  latestDetail.value = null
+  editKey.value = null
+  editUncertain.value = null
+  editRetryVerified.value = false
+  editOverrideToken.value = null
+  editCapabilities.value = null
   detailError.value = ''
   mode.value = 'edit'
+  if (memory.sharedConnectionId) void loadEditCapabilities(memory.id)
+}
+
+async function loadEditCapabilities(id: string) {
+  const userId = session.user?.id
+  editCapabilitiesLoading.value = true
+  try {
+    const value = await getMemoryActionCapabilities(id, 'MEMORY_EDIT')
+    if (session.user?.id === userId && detail.value?.id === id && mode.value === 'edit') {
+      editCapabilities.value = value
+    }
+  } catch (cause) {
+    if (session.user?.id === userId && mode.value === 'edit') detailError.value = errorMessage(cause)
+  } finally { editCapabilitiesLoading.value = false }
+}
+
+async function latestForEdit(message: string): Promise<MemoryDetail | null> {
+  if (!detail.value) return null
+  const id = detail.value.id
+  const userId = session.user?.id
+  try {
+    const latest = await getMemory(id)
+    if (session.user?.id !== userId || detail.value?.id !== id) return null
+    latestVersion.value = latest.version
+    latestDetail.value = latest
+    detailError.value = message
+    if (latest.sharedConnectionId) void loadEditCapabilities(id)
+    return latest
+  } catch (cause) {
+    if (session.user?.id !== userId) return null
+    if (cause instanceof ApiError && cause.status === 404) {
+      mode.value = 'detail'
+      detail.value = null
+      detailError.value = '卡片已不可访问。请查看最新列表。'
+      void load(1)
+    } else detailError.value = errorMessage(cause)
+    return null
+  }
+}
+
+function matchesEdit(write: MemoryWrite, latest: MemoryDetail): boolean {
+  return latest.title === write.title && latest.body === write.body
+    && latest.category === write.category && latest.sourceType === write.sourceType
+    && latest.sourceDate === write.sourceDate && latest.nextAction === write.nextAction
+    && latest.tags.length === write.tags.length
+    && latest.tags.every((tag, index) => tag === write.tags[index])
+}
+
+async function savedEdit(saved: MemoryDetail) {
+  detail.value = saved
+  mode.value = 'detail'
+  latestVersion.value = null
+  latestDetail.value = null
+  editKey.value = null
+  editUncertain.value = null
+  editRetryVerified.value = false
+  editOverrideToken.value = null
+  detailError.value = ''
+  if (archived.value) view.value = 'MINE'
+  else await load(1)
+  void refreshUnread()
+}
+
+async function verifyEditUncertain() {
+  const attempt = editUncertain.value
+  if (!attempt) return
+  editRetryVerified.value = false
+  const latest = await latestForEdit('正在核对服务端的卡片状态。')
+  if (!latest) return
+  if (latest.version !== attempt.version && matchesEdit(attempt.write, latest)) {
+    await savedEdit(latest)
+  } else if (latest.sharedConnectionId !== attempt.sharedConnectionId) {
+    editUncertain.value = null
+    detailError.value = '分享状态已变化。输入已保留，请核对最新卡片后重新提交。'
+  } else {
+    latestVersion.value = null
+    editRetryVerified.value = true
+    detailError.value = '已读取服务端当前卡片。可用原请求和原幂等键核对提交结果。'
+  }
+}
+
+async function persistEdit(attempt: EditAttempt) {
+  operationPending.value = true
+  detailError.value = ''
+  try {
+    const saved = await patchMemory(attempt.id, attempt.version, attempt.write,
+      attempt.key, attempt.notificationOverride)
+    await savedEdit(saved)
+  } catch (cause) {
+    if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status >= 500)) {
+      editUncertain.value = attempt
+      detailError.value = '保存结果尚不确定。请先读取最新卡片，再决定是否用原请求重试。'
+      await verifyEditUncertain()
+    } else if (cause instanceof ApiError && cause.code === 'MAIL_NOT_AVAILABLE'
+      && typeof cause.details?.overrideToken === 'string') {
+      editOverrideToken.value = cause.details.overrideToken
+      editKey.value = attempt.key
+      detailError.value = '对方的历史邮件方式当前不可用。请明确选择本次改为站内通知或不通知。'
+    } else if (cause instanceof ApiError && (cause.code === 'VERSION_CONFLICT'
+      || cause.code === 'NOTIFICATION_CONTEXT_CHANGED')) {
+      editKey.value = null
+      editUncertain.value = null
+      editOverrideToken.value = null
+      await latestForEdit('卡片或通知设置已变化。输入已保留，请核对最新内容。')
+    } else if (cause instanceof ApiError && cause.status === 404) {
+      await memoryUnavailable()
+    } else detailError.value = errorMessage(cause)
+  } finally { operationPending.value = false }
 }
 
 function parseTags(): string[] {
   return [...new Set(draft.tagsText.split(/[,，\n]/).map(value => value.trim()).filter(Boolean))]
 }
 
-async function saveMemory() {
-  if (operationPending.value) return
+async function saveMemory(useOverride = false) {
+  if (operationPending.value || editUncertain.value || latestVersion.value) return
   detailError.value = ''
   if (!draft.body.trim()) { detailError.value = '请填写卡片正文。'; return }
   const parsedTags = parseTags()
@@ -173,6 +311,16 @@ async function saveMemory() {
     category: draft.category || null, tags: parsedTags, sourceType: draft.sourceType,
     sourceDate: draft.sourceDate || null, nextAction: draft.nextAction.trim() || null,
   }
+  if (mode.value === 'edit' && detail.value) {
+    if (!!editOverrideToken.value !== useOverride) return
+    const key = editKey.value ?? crypto.randomUUID()
+    editKey.value = key
+    await persistEdit({ id: detail.value.id, version: editVersion.value, write, key,
+      sharedConnectionId: detail.value.sharedConnectionId,
+      ...(useOverride ? { notificationOverride: { mode: editOverrideMode.value,
+        token: editOverrideToken.value! } } : {}) })
+    return
+  }
   let reminderPlan: ReturnType<typeof validateCreatedReminder> = null
   if (mode.value === 'create') {
     try { reminderPlan = validateCreatedReminder() }
@@ -180,32 +328,34 @@ async function saveMemory() {
   }
   operationPending.value = true
   try {
-    const creating = mode.value === 'create'
-    const saved = mode.value === 'edit' && detail.value
-      ? await patchMemory(detail.value.id, editVersion.value, write, crypto.randomUUID()) : await createMemory(write)
+    const saved = await createMemory(write)
     detail.value = saved
     mode.value = 'detail'
     latestVersion.value = null
     if (archived.value) view.value = 'MINE'
     else await load(1)
-    if (creating) {
-      const reminder = await applyCreatedReminder(saved.id, reminderPlan)
-      if (reminder) detail.value = { ...saved, myReminder: reminder }
-      else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
-    }
+    const reminder = await applyCreatedReminder(saved.id, reminderPlan)
+    if (reminder) detail.value = { ...saved, myReminder: reminder }
+    else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
   } catch (cause) {
     detailError.value = errorMessage(cause)
-    if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
-      try { latestVersion.value = (await getMemory(detail.value.id)).version }
-      catch { /* The user's draft remains available. */ }
-    }
   } finally { operationPending.value = false }
+}
+
+function retryEditOriginal() {
+  if (!editUncertain.value || !editRetryVerified.value || operationPending.value) return
+  void persistEdit(editUncertain.value)
 }
 
 function useLatestVersion() {
   if (!latestVersion.value) return
   editVersion.value = latestVersion.value
+  if (latestDetail.value) detail.value = latestDetail.value
   latestVersion.value = null
+  latestDetail.value = null
+  editKey.value = null
+  editOverrideToken.value = null
+  editUncertain.value = null
   detailError.value = '请核对当前输入，然后再次保存。'
 }
 
@@ -330,7 +480,7 @@ async function retryCreatedReminder() {
       @click="load(page + 1)">{{ loadingMore ? '正在加载…' : '再翻 9 张记忆' }}</button></div>
 
     <BaseDialog :open="mode !== null" :title="mode === 'create' ? '记一张卡片' : mode === 'edit' ? '编辑记忆' : detail?.title || '记忆详情'"
-      :wide="true" :busy="operationPending || shareBusy" @close="closeDialog">
+      :wide="true" :busy="operationPending || shareBusy || commentBusy" @close="closeDialog">
       <div v-if="mode === 'detail'">
         <div v-if="detailLoading" class="loading-state" role="status">正在读取卡片…</div>
         <template v-else-if="detail">
@@ -353,6 +503,9 @@ async function retryCreatedReminder() {
           <MemoryFollowUpSettings v-if="detail.sharedConnectionId" :key="detail.id"
             :memory-id="detail.id" :is-owner="isMine(detail)" :setting="detail.myNotificationSetting"
             @changed="settingChanged" @unavailable="memoryUnavailable" />
+          <MemoryComments v-if="detail.sharedConnectionId" :key="detail.id" :memory="detail"
+            :is-owner="isMine(detail)" @updated="memoryUpdated" @unavailable="memoryUnavailable"
+            @busy="commentBusy = $event" />
           <div v-if="isMine(detail) && confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
             <button class="btn danger mt-16" :disabled="operationPending" @click="removeMemory">确认删除</button>
             <button class="text-button" @click="confirmDelete = false">再想一下</button></div>
@@ -365,33 +518,48 @@ async function retryCreatedReminder() {
         </template>
         <p v-if="detailError" class="form-error mt-16" role="alert">{{ detailError }}</p>
       </div>
-      <form v-else-if="mode === 'create' || mode === 'edit'" class="form-stack" @submit.prevent="saveMemory">
+      <form v-else-if="mode === 'create' || mode === 'edit'" class="form-stack" @submit.prevent="saveMemory()">
         <div class="field"><label for="memory-title">标题 <small>可选</small></label>
-          <input id="memory-title" v-model="draft.title" maxlength="100" placeholder="给这件小事取个名字" /></div>
+          <input id="memory-title" v-model="draft.title" maxlength="100" :disabled="!!editUncertain" placeholder="给这件小事取个名字" /></div>
         <div class="field"><label for="memory-body">记下的内容</label>
-          <textarea id="memory-body" v-model="draft.body" maxlength="5000" required rows="6" placeholder="你想记住什么？" /></div>
+          <textarea id="memory-body" v-model="draft.body" maxlength="5000" required rows="6" :disabled="!!editUncertain" placeholder="你想记住什么？" /></div>
         <div class="form-grid"><div class="field"><label for="memory-category">类别 <small>可选</small></label>
-          <select id="memory-category" v-model="draft.category"><option value="">不分类</option>
+          <select id="memory-category" v-model="draft.category" :disabled="!!editUncertain"><option value="">不分类</option>
             <option v-for="(label, value) in categoryLabels" :key="value" :value="value">{{ label }}</option></select></div>
           <div class="field"><label for="memory-source">信息来源</label>
-            <select id="memory-source" v-model="draft.sourceType">
+            <select id="memory-source" v-model="draft.sourceType" :disabled="!!editUncertain">
               <option v-for="(label, value) in sourceLabels" :key="value" :value="value">{{ label }}</option></select></div></div>
         <div class="field"><label for="memory-tags">标签 <small>可选，用逗号分隔</small></label>
-          <input id="memory-tags" v-model="draft.tagsText" placeholder="例如：散步，饮食" /></div>
+          <input id="memory-tags" v-model="draft.tagsText" :disabled="!!editUncertain" placeholder="例如：散步，饮食" /></div>
         <div class="field"><label for="memory-date">来源日期 <small>可选</small></label>
-          <input id="memory-date" v-model="draft.sourceDate" type="date" /></div>
+          <input id="memory-date" v-model="draft.sourceDate" type="date" :disabled="!!editUncertain" /></div>
         <div class="field"><label for="memory-next">下次行动 <small>可选</small></label>
-          <textarea id="memory-next" v-model="draft.nextAction" maxlength="5000" rows="2" /></div>
+          <textarea id="memory-next" v-model="draft.nextAction" maxlength="5000" rows="2" :disabled="!!editUncertain" /></div>
         <ReminderDraftFields v-if="mode === 'create'" prefix="memory-create" :timezone="timezone"
           :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
           v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
         <p v-else class="field-help">要调整私人提醒，请先保存卡片，再在详情中设置。</p>
         <div class="inline-note">新卡片默认只对你自己可见；提醒只发给自己。</div>
+        <p v-if="mode === 'edit' && editCapabilitiesLoading" class="field-help">正在确认本次编辑的通知方式…</p>
+        <p v-if="mode === 'edit' && editCapabilities?.effectiveOutgoingMode" class="field-help">
+          对方目前选择：{{ editCapabilities.effectiveOutgoingMode === 'NONE' ? '不接收后续通知' : editCapabilities.effectiveOutgoingMode === 'IN_APP' ? '接收站内通知' : '历史邮件方式；保存时需明确改选' }}。</p>
         <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
-        <div v-if="latestVersion" class="inline-note peach"><p>卡片在其他位置发生了变化。当前输入已保留。</p>
+        <div v-if="latestVersion && !editUncertain" class="inline-note peach"><p>卡片在其他位置发生了变化。当前输入已保留。服务端版本：{{ latestVersion }}。</p>
+          <p v-if="latestDetail" class="detail-body">最新原文：{{ latestDetail.body }}</p>
           <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>
+        <div v-if="editOverrideToken" class="inline-note peach"><p>邮件发送尚未启用。此次改选只影响本次编辑，不改变对方保存的方式。</p>
+          <div class="field mt-8"><label for="memory-edit-override">本次怎样通知对方</label>
+            <select id="memory-edit-override" v-model="editOverrideMode"><option value="IN_APP">站内通知</option>
+              <option value="NONE">不通知</option></select></div>
+          <button type="button" class="btn primary mt-16" :disabled="operationPending" @click="saveMemory(true)">
+            {{ operationPending ? '正在保存…' : '确认改选并保存卡片' }}</button></div>
+        <div v-if="editUncertain" class="inline-note peach"><p>保存结果尚不确定；原请求已锁定，不会生成新幂等键。</p>
+          <p v-if="latestDetail" class="detail-body">服务端当前原文：{{ latestDetail.body }}</p>
+          <button type="button" class="btn secondary" :disabled="operationPending" @click="verifyEditUncertain">重新读取状态</button>
+          <button v-if="editRetryVerified" type="button" class="btn primary" :disabled="operationPending" @click="retryEditOriginal">使用原请求核对结果</button></div>
         <div class="dialog-actions"><button type="button" class="btn secondary" @click="closeDialog">取消</button>
-          <button type="submit" class="btn primary" :disabled="operationPending">{{ operationPending ? '正在保存…' : '保存卡片' }}</button></div>
+          <button v-if="!editOverrideToken && !editUncertain" type="submit" class="btn primary"
+            :disabled="operationPending || !!latestVersion">{{ operationPending ? '正在保存…' : '保存卡片' }}</button></div>
       </form>
     </BaseDialog>
   </AppShell>

@@ -79,4 +79,12 @@ describe('session API client', () => {
     expect(fetchMock.mock.calls[1]![1].headers.get('Idempotency-Key'))
       .toBe('01234567-89ab-4cde-8fab-0123456789ab')
   })
+
+  it('preserves structured conflict details for explicit notification recovery', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ code: 'MAIL_NOT_AVAILABLE',
+      message: '邮件不可用', details: { overrideToken: 'server-token' } }, 409)))
+    await expect(request('GET', '/memories/1')).rejects.toMatchObject({
+      code: 'MAIL_NOT_AVAILABLE', details: { overrideToken: 'server-token' },
+    })
+  })
 })

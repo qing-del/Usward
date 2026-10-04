@@ -7,6 +7,10 @@ export type SourceType = 'EXPLICIT' | 'OBSERVED' | 'INTERPRETATION'
 export type MemoryScope = 'ALL' | 'MINE' | 'PARTNER'
 export type FollowUpMode = 'NONE' | 'IN_APP' | 'IN_APP_AND_MAIL'
 export interface MemoryNotificationSetting { followUpMode: FollowUpMode; version: string | null }
+export interface MemoryNotificationSettingDetail extends MemoryNotificationSetting {
+  resourceType: 'MEMORY_CARD'
+  resourceId: string
+}
 export interface MemoryNotificationCapabilities {
   selfMailAvailable: boolean
   otherMailAvailable: boolean
@@ -115,6 +119,24 @@ export function deleteMemory(id: string, expectedVersion: string): Promise<void>
 export function getShareCapabilities(connectionId: string): Promise<MemoryNotificationCapabilities> {
   return request<MemoryNotificationCapabilities>('GET',
     `/notification-capabilities?${query({ connectionId })}`)
+}
+
+export function getMemoryActionCapabilities(id: string, action: 'MEMORY_EDIT' | 'MEMORY_COMMENT'):
+  Promise<MemoryNotificationCapabilities> {
+  return request<MemoryNotificationCapabilities>('GET',
+    `/notification-capabilities?${query({ resourceType: 'MEMORY_CARD', resourceId: id, action })}`)
+}
+
+export function getMemoryNotificationSetting(id: string): Promise<MemoryNotificationSettingDetail> {
+  return request<MemoryNotificationSettingDetail>('GET',
+    `/notification-settings/MEMORY_CARD/${encodeURIComponent(id)}`)
+}
+
+export function putMemoryNotificationSetting(id: string, followUpMode: FollowUpMode,
+  expectedVersion: string | null): Promise<MemoryNotificationSettingDetail> {
+  return request<MemoryNotificationSettingDetail>('PUT',
+    `/notification-settings/MEMORY_CARD/${encodeURIComponent(id)}`,
+    { followUpMode, expectedVersion })
 }
 
 export function shareMemory(id: string, body: MemoryShareWrite,

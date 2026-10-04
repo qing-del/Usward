@@ -7,10 +7,12 @@ import ReminderEditor from '../components/ReminderEditor.vue'
 import ReminderDraftFields from '../components/ReminderDraftFields.vue'
 import ReminderRecovery from '../components/ReminderRecovery.vue'
 import MemoryShareControls from '../components/MemoryShareControls.vue'
+import MemoryFollowUpSettings from '../components/MemoryFollowUpSettings.vue'
 import { ApiError, errorMessage } from '../api'
 import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
-import type { MemoryCategory, MemoryDetail, MemoryScope, MemorySummary, MemoryWrite, SourceType } from '../memories'
+import type { MemoryCategory, MemoryDetail, MemoryNotificationSetting, MemoryScope,
+  MemorySummary, MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
 import { refreshUnread } from '../unread'
 import { useCreatedReminder } from '../useCreatedReminder'
@@ -258,6 +260,23 @@ function memoryUpdated(value: MemoryDetail) {
   void load(1)
   void refreshUnread()
 }
+function settingChanged(value: MemoryNotificationSetting) {
+  if (detail.value) detail.value = { ...detail.value, myNotificationSetting: value }
+}
+async function memoryUnavailable() {
+  if (!detail.value) return
+  if (!isMine(detail.value)) {
+    detail.value = null
+    detailError.value = '这张分享卡片已不可访问。请查看最新列表。'
+  } else {
+    try { detail.value = await getMemory(detail.value.id) }
+    catch {
+      detail.value = null
+      detailError.value = '这张卡片已不可访问。请查看最新列表。'
+    }
+  }
+  await load(1)
+}
 async function retryCreatedReminder() {
   const reminder = await retryReminder()
   if (detail.value && reminder) detail.value = { ...detail.value, myReminder: reminder }
@@ -331,6 +350,9 @@ async function retryCreatedReminder() {
             :reminder="detail.myReminder" @changed="reminderChanged" />
           <MemoryShareControls v-if="isMine(detail)" :key="detail.id" :memory="detail"
             @updated="memoryUpdated" @busy="shareBusy = $event" />
+          <MemoryFollowUpSettings v-if="detail.sharedConnectionId" :key="detail.id"
+            :memory-id="detail.id" :is-owner="isMine(detail)" :setting="detail.myNotificationSetting"
+            @changed="settingChanged" @unavailable="memoryUnavailable" />
           <div v-if="isMine(detail) && confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
             <button class="btn danger mt-16" :disabled="operationPending" @click="removeMemory">确认删除</button>
             <button class="text-button" @click="confirmDelete = false">再想一下</button></div>

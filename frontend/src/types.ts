@@ -17,5 +17,6 @@ export interface ApiErrorBody {
   code: string
   message: string
   fieldErrors?: Record<string, string> | null
+  details?: Record<string, unknown> | null
   traceId?: string
 }

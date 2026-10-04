@@ -6,6 +6,7 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public fieldErrors: Record<string, string> = {},
+    public details: Record<string, unknown> | null = null,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -42,7 +43,7 @@ async function failure(response: Response): Promise<ApiError> {
   let body: ApiErrorBody | null = null
   try { body = await response.json() as ApiErrorBody } catch { /* Non-JSON gateway failure. */ }
   return new ApiError(response.status, body?.code ?? 'HTTP_ERROR',
-    body?.message ?? '请求暂时无法完成，请稍后再试。', body?.fieldErrors ?? {})
+    body?.message ?? '请求暂时无法完成，请稍后再试。', body?.fieldErrors ?? {}, body?.details ?? null)
 }
 
 export async function request<T>(method: Method, path: string, body?: unknown,

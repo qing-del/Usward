@@ -2,7 +2,7 @@ spring:
   application:
     name: Usward
   datasource:
-    url: ${USWARD_DB_URL}
+    url: jdbc:mysql://${USWARD_DB_HOST}:${USWARD_DB_PORT}/${USWARD_DB_NAME}?connectionTimeZone=UTC
     username: ${USWARD_DB_USER}
     password: ${USWARD_DB_PASSWORD}
     hikari:

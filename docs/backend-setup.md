@@ -14,7 +14,7 @@
 
 `GET /availability` 使用与日历相同的 `from`、`to`、`timezone` 参数及 1–93 个当地日的范围校验，只读取当前连接另一方主动开放的个人忙闲。`sharingEnabled=false` 表示未连接或对方未开启，`true` 且空 `blocks` 表示已开启但该范围没有时间块。区段只含不透明 ID、UTC 起止时间、忙闲状态和可公开标题；重叠安排会合并，个人事件 ID、地点和备注不返回。对方通过 `PATCH /me` 开启或关闭 `shareAvailability`，解除连接时自动关闭。
 
-需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_URL`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表并执行 V2；已有 Flyway 数据库升级时，V2 将存量个人安排的公开标题选择清零并递增受影响事件版本，用户须为当前连接重新选择公开标题。不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
+需要 Java 21 和 MySQL 8.4。先建立空数据库（字符集 `utf8mb4`），设置 `USWARD_DB_HOST`、`USWARD_DB_PORT`、`USWARD_DB_NAME`、`USWARD_DB_USER`、`USWARD_DB_PASSWORD`；变量名称见仓库根目录的 `.env.example`。数据库 URL 由前三个变量拼接；已有部署需将原 `USWARD_DB_URL` 拆分为这三个变量。数据库密码只放在本机环境或部署秘密配置中。启动应用时 Flyway 从 V1 创建表并执行 V2；已有 Flyway 数据库升级时，V2 将存量个人安排的公开标题选择清零并递增受影响事件版本，用户须为当前连接重新选择公开标题。不要先运行 `static/database/initDatabase.sql` 再让 Flyway 接管同一个库。
 
 ```sh
 ./mvnw -DskipTests package

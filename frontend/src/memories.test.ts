@@ -27,16 +27,17 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
   status, headers: { 'Content-Type': 'application/json' },
 })
 
-async function mountedPage() {
+async function mountedPage(initial = '/memories') {
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/memories', component: MemoriesPage },
   ] })
-  await router.push('/memories')
+  await router.push(initial)
   await router.isReady()
-  return mount(MemoriesPage, { global: { plugins: [router], stubs: {
+  const wrapper = mount(MemoriesPage, { global: { plugins: [router], stubs: {
     AppShell: { template: '<div><slot /></div>' },
     BaseDialog: { props: ['open', 'title'], template: '<div v-if="open"><slot /></div>' },
   } } })
+  return { wrapper, router }
 }
 
 describe('private memories', () => {
@@ -54,10 +55,10 @@ describe('private memories', () => {
       return Promise.resolve(json(page([summary], 1, true)))
     })
     vi.stubGlobal('fetch', fetchMock)
-    const wrapper = await mountedPage()
+    const { wrapper } = await mountedPage()
     await flushPromises()
 
-    expect(fetchMock.mock.calls[0][0]).toContain('scope=MINE&archived=false')
+    expect(fetchMock.mock.calls[0][0]).toContain('scope=ALL&archived=false')
     expect(fetchMock.mock.calls[0][0]).toContain('page=1&size=9')
     expect(wrapper.text()).toContain('2 张小小的记忆')
     expect(wrapper.text()).not.toContain(detail.body)
@@ -89,7 +90,7 @@ describe('private memories', () => {
       return Promise.resolve(json(page([summary], 1)))
     })
     vi.stubGlobal('fetch', fetchMock)
-    const wrapper = await mountedPage()
+    const { wrapper } = await mountedPage()
     await flushPromises()
     await wrapper.get('.memory-open').trigger('click')
     await flushPromises()
@@ -113,11 +114,34 @@ describe('private memories', () => {
     const fetchMock = vi.fn().mockResolvedValue(json({ ...page([summary], 1), total: 40,
       availableTags: [{ tag: '花', count: 27 }] }))
     vi.stubGlobal('fetch', fetchMock)
-    const result = await listMemories({ archived: false, keyword: '花', category: 'INTEREST',
+    const result = await listMemories({ scope: 'MINE', archived: false, keyword: '花', category: 'INTEREST',
       tag: '花', page: 1, size: 9 })
     expect(result.total).toBe(40)
     expect(result.availableTags[0]?.count).toBe(27)
     expect(fetchMock.mock.calls[0][0]).toContain('keyword=%E8%8A%B1')
     expect(fetchMock.mock.calls[0][0]).toContain('category=INTEREST')
+  })
+
+  it('keeps partner cards read-only and opens a changed deep link without remounting', async () => {
+    const partner = { ...summary, id: '2', ownerId: '2',
+      owner: { id: '2', nickname: 'Bob', avatarStyle: 'FLOWER' }, sharedConnectionId: '11' }
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.endsWith('/memories/2')) return Promise.resolve(json({ ...partner,
+        body: '对方共享的正文', sourceDate: null, nextAction: null, archived: null,
+        myReminder: null, myNotificationSetting: { followUpMode: 'IN_APP', version: '1' } }))
+      return Promise.resolve(json(page([partner], 1)))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { wrapper, router } = await mountedPage('/memories?scope=PARTNER')
+    await flushPromises()
+    expect(fetchMock.mock.calls[0][0]).toContain('scope=PARTNER&archived=false')
+    expect(wrapper.text()).toContain('Bob 分享')
+    expect(wrapper.text()).not.toContain('对方共享的正文')
+    await router.push('/memories?scope=PARTNER&memory=2')
+    await flushPromises()
+    expect(wrapper.text()).toContain('对方共享的正文')
+    expect(wrapper.find('.dialog-actions .primary').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('删除')
+    wrapper.unmount()
   })
 })

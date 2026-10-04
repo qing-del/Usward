@@ -4,6 +4,9 @@ import type { ReminderDetail } from './reminders'
 export type MemoryCategory = 'INTEREST' | 'RECENT_CONCERN' | 'RELATIONSHIP_PREFERENCE'
   | 'BOUNDARY' | 'SHARED_EXPERIENCE' | 'SELF_REFLECTION' | 'OTHER'
 export type SourceType = 'EXPLICIT' | 'OBSERVED' | 'INTERPRETATION'
+export type MemoryScope = 'ALL' | 'MINE' | 'PARTNER'
+export type FollowUpMode = 'NONE' | 'IN_APP' | 'IN_APP_AND_MAIL'
+export interface MemoryNotificationSetting { followUpMode: FollowUpMode; version: string | null }
 
 export const categoryLabels: Record<MemoryCategory, string> = {
   INTEREST: '喜好兴趣', RECENT_CONCERN: '近期关注', RELATIONSHIP_PREFERENCE: '相处偏好',
@@ -28,13 +31,13 @@ export interface MemorySummary {
   sharedConnectionId: string | null
 }
 
-export interface MemoryDetail extends Omit<MemorySummary, 'owner'> {
+export interface MemoryDetail extends MemorySummary {
   body: string
   sourceDate: string | null
   nextAction: string | null
-  archived: boolean
+  archived: boolean | null
   myReminder: ReminderDetail | null
-  myNotificationSetting: null
+  myNotificationSetting: MemoryNotificationSetting | null
 }
 
 export interface MemoryPage {
@@ -58,6 +61,7 @@ export interface MemoryWrite {
 }
 
 export interface MemoryFilter {
+  scope: MemoryScope
   archived: boolean
   keyword: string
   category: MemoryCategory | null
@@ -68,7 +72,7 @@ export interface MemoryFilter {
 
 export function listMemories(filter: MemoryFilter, signal?: AbortSignal): Promise<MemoryPage> {
   return request<MemoryPage>('GET', `/memories?${query({
-    scope: 'MINE', archived: filter.archived, keyword: filter.keyword.trim(),
+    scope: filter.scope, archived: filter.archived, keyword: filter.keyword.trim(),
     category: filter.category, tag: filter.tag, sort: 'UPDATED_DESC',
     page: filter.page, size: filter.size,
   })}`, undefined, { signal })
@@ -82,8 +86,10 @@ export function createMemory(write: MemoryWrite): Promise<MemoryDetail> {
   return request<MemoryDetail>('POST', '/memories', write)
 }
 
-export function patchMemory(id: string, expectedVersion: string, write: MemoryWrite): Promise<MemoryDetail> {
-  return request<MemoryDetail>('PATCH', `/memories/${encodeURIComponent(id)}`, { expectedVersion, ...write })
+export function patchMemory(id: string, expectedVersion: string, write: MemoryWrite,
+  idempotencyKey: string): Promise<MemoryDetail> {
+  return request<MemoryDetail>('PATCH', `/memories/${encodeURIComponent(id)}`,
+    { expectedVersion, ...write }, { idempotencyKey })
 }
 
 export function setMemoryArchived(id: string, expectedVersion: string, archived: boolean): Promise<MemoryDetail> {

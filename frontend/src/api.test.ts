@@ -68,4 +68,15 @@ describe('session API client', () => {
     await expect(request('GET', '/events/1')).rejects.toEqual(new ApiError(409, 'VERSION_CONFLICT', '已变化'))
     expect(query({ page: 1, archived: false, tag: null, keyword: '' })).toBe('page=1&archived=false')
   })
+
+  it('sends an idempotency key with a write request', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      .mockResolvedValueOnce(json({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+    await request('POST', '/memories/1/share', { expectedVersion: '0' },
+      { idempotencyKey: '01234567-89ab-4cde-8fab-0123456789ab' })
+    expect(fetchMock.mock.calls[1]![1].headers.get('Idempotency-Key'))
+      .toBe('01234567-89ab-4cde-8fab-0123456789ab')
+  })
 })

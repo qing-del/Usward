@@ -13,7 +13,7 @@ export class ApiError extends Error {
 }
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-type RequestOptions = { silentAuth?: boolean; signal?: AbortSignal }
+type RequestOptions = { silentAuth?: boolean; signal?: AbortSignal; idempotencyKey?: string }
 
 let csrf: { headerName: string; token: string } | null = null
 let csrfPromise: Promise<void> | null = null
@@ -52,6 +52,7 @@ export async function request<T>(method: Method, path: string, body?: unknown,
     if (!csrf) await refreshCsrf()
     if (csrf) headers.set(csrf.headerName, csrf.token)
     if (body !== undefined) headers.set('Content-Type', 'application/json')
+    if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey)
   }
   let response: Response
   try {

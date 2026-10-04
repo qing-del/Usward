@@ -9,12 +9,19 @@ import ReminderRecovery from '../components/ReminderRecovery.vue'
 import { ApiError, errorMessage } from '../api'
 import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
-import type { MemoryCategory, MemoryDetail, MemorySummary, MemoryWrite, SourceType } from '../memories'
+import type { MemoryCategory, MemoryDetail, MemoryScope, MemorySummary, MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
 import { useCreatedReminder } from '../useCreatedReminder'
 
 const route = useRoute()
-const archived = ref(route.query.archived === '1')
+type MemoryView = MemoryScope | 'ARCHIVED'
+function routeView(): MemoryView {
+  if (route.query.archived === '1') return 'ARCHIVED'
+  return route.query.scope === 'MINE' || route.query.scope === 'PARTNER' ? route.query.scope : 'ALL'
+}
+const view = ref<MemoryView>(routeView())
+const archived = computed(() => view.value === 'ARCHIVED')
+const scope = computed<MemoryScope>(() => archived.value ? 'MINE' : view.value as MemoryScope)
 const keyword = ref('')
 const category = ref<MemoryCategory | null>(null)
 const tag = ref('')
@@ -55,7 +62,7 @@ async function load(targetPage: number) {
   if (targetPage === 1) { loading.value = true; items.value = []; total.value = 0; listError.value = '' }
   else loadingMore.value = true
   try {
-    const result = await listMemories({ archived: archived.value, keyword: keyword.value,
+    const result = await listMemories({ scope: scope.value, archived: archived.value, keyword: keyword.value,
       category: category.value, tag: tag.value, page: targetPage, size: 9 }, abort.signal)
     if (current !== sequence) return
     items.value = targetPage === 1 ? result.items : [...items.value, ...result.items]
@@ -77,7 +84,7 @@ function resetFilters() {
   tag.value = ''
 }
 
-watch([archived, category, tag, keyword], (next, previous) => {
+watch([view, category, tag, keyword], (next, previous) => {
   if (searchTimer) clearTimeout(searchTimer)
   searchTimer = setTimeout(() => load(1), next[3] === previous[3] ? 0 : 280)
 })
@@ -88,7 +95,17 @@ onMounted(() => {
     openMemory(route.query.memory)
   }
 })
+watch(() => route.query.memory, value => {
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value) && value !== detail.value?.id) {
+    void openMemory(value)
+  }
+})
+watch(() => [route.query.scope, route.query.archived], () => { view.value = routeView() })
 onBeforeUnmount(() => { abort?.abort(); if (searchTimer) clearTimeout(searchTimer) })
+
+function isMine(memory: Pick<MemorySummary, 'ownerId'>): boolean {
+  return memory.ownerId === session.user?.id
+}
 
 function closeDialog() {
   if (operationPending.value) return
@@ -122,7 +139,7 @@ async function openMemory(id: string) {
 }
 
 function editMemory() {
-  if (!detail.value) return
+  if (!detail.value || !isMine(detail.value)) return
   const memory = detail.value
   Object.assign(draft, { title: memory.title ?? '', body: memory.body,
     category: memory.category ?? '', tagsText: memory.tags.join('，'),
@@ -160,11 +177,11 @@ async function saveMemory() {
   try {
     const creating = mode.value === 'create'
     const saved = mode.value === 'edit' && detail.value
-      ? await patchMemory(detail.value.id, editVersion.value, write) : await createMemory(write)
+      ? await patchMemory(detail.value.id, editVersion.value, write, crypto.randomUUID()) : await createMemory(write)
     detail.value = saved
     mode.value = 'detail'
     latestVersion.value = null
-    if (archived.value) archived.value = false
+    if (archived.value) view.value = 'MINE'
     else await load(1)
     if (creating) {
       const reminder = await applyCreatedReminder(saved.id, reminderPlan)
@@ -188,7 +205,7 @@ function useLatestVersion() {
 }
 
 async function toggleArchived() {
-  if (!detail.value || operationPending.value) return
+  if (!detail.value || !isMine(detail.value) || operationPending.value) return
   detailError.value = ''
   operationPending.value = true
   try {
@@ -203,7 +220,7 @@ async function toggleArchived() {
 }
 
 async function removeMemory() {
-  if (!detail.value || operationPending.value) return
+  if (!detail.value || !isMine(detail.value) || operationPending.value) return
   detailError.value = ''
   operationPending.value = true
   try {
@@ -248,10 +265,12 @@ async function retryCreatedReminder() {
       <p class="subtitle">偏好、边界、平常的瞬间，都可以慢慢收好。</p></div>
       <button class="btn primary" @click="newMemory">＋ 记一张卡片</button></div>
     <div class="memory-intro"><span class="memory-intro-mark">✿</span>
-      <p>记忆是一份温柔的备忘，不是关于彼此的定论。<br /><small>新记录默认“我的理解，待确认”；目前所有卡片都仅自己可见。</small></p></div>
+      <p>记忆是一份温柔的备忘，不是关于彼此的定论。<br /><small>新记录默认只属于自己；对方分享的卡片会标明作者。</small></p></div>
     <div class="memory-toolbar toolbar"><div class="tabs" aria-label="记忆状态">
-      <button class="tab" :aria-pressed="!archived" @click="archived = false">我的记忆</button>
-      <button class="tab" :aria-pressed="archived" @click="archived = true">已归档</button></div>
+      <button class="tab" :aria-pressed="view === 'ALL'" @click="view = 'ALL'">全部</button>
+      <button class="tab" :aria-pressed="view === 'MINE'" @click="view = 'MINE'">我的</button>
+      <button class="tab" :aria-pressed="view === 'PARTNER'" @click="view = 'PARTNER'">对方分享</button>
+      <button class="tab" :aria-pressed="view === 'ARCHIVED'" @click="view = 'ARCHIVED'">已归档</button></div>
       <div class="search-field"><label class="sr-only" for="memory-search">搜索记忆</label>
         <span aria-hidden="true">⌕</span><input id="memory-search" v-model="keyword" type="search" placeholder="找一件记得的小事…" /></div></div>
     <div class="memory-filters"><div class="filter-chips" aria-label="类别筛选">
@@ -267,7 +286,7 @@ async function retryCreatedReminder() {
     <div v-else-if="listError" class="card"><p class="form-error" role="alert">{{ listError }}</p>
       <button class="btn secondary mt-16" @click="load(1)">重试</button></div>
     <div v-else-if="!items.length" class="card empty-state"><span class="empty-mark">✿</span>
-      <h3>暂时没有找到记忆</h3><p>可以换个关键词，或清除筛选后再看看。</p>
+      <h3>暂时没有找到记忆</h3><p>{{ view === 'PARTNER' ? '对方主动分享的卡片会出现在这里。' : '可以换个关键词，或清除筛选后再看看。' }}</p>
       <button v-if="keyword || category || tag" class="btn secondary mt-16" @click="resetFilters">清除筛选</button></div>
     <div v-else class="memory-grid">
       <article v-for="memory in items" :key="memory.id" class="memory-card">
@@ -277,7 +296,7 @@ async function retryCreatedReminder() {
           <span class="memory-source" :class="{ interpretation: memory.sourceType === 'INTERPRETATION' }">
             {{ sourceLabels[memory.sourceType] }}</span>
           <span v-if="memory.tags.length" class="memory-card-tags">{{ memory.tags.map(item => `# ${item}`).join('　') }}</span>
-          <span class="memory-card-bottom"><span>仅自己可见</span><span>{{ readableDate(memory.updatedAt) }}</span></span>
+          <span class="memory-card-bottom"><span>{{ isMine(memory) ? memory.sharedConnectionId ? '已分享' : '仅自己可见' : `${memory.owner.nickname} 分享` }}</span><span>{{ readableDate(memory.updatedAt) }}</span></span>
         </button></article></div>
     <div v-if="hasMore && !loading" class="more-row"><button class="btn secondary" :disabled="loadingMore"
       @click="load(page + 1)">{{ loadingMore ? '正在加载…' : '再翻 9 张记忆' }}</button></div>
@@ -287,7 +306,7 @@ async function retryCreatedReminder() {
       <div v-if="mode === 'detail'">
         <div v-if="detailLoading" class="loading-state" role="status">正在读取卡片…</div>
         <template v-else-if="detail">
-          <div class="detail-meta"><span class="badge green">仅自己可见</span>
+          <div class="detail-meta"><span class="badge green">{{ isMine(detail) ? detail.sharedConnectionId ? '已分享给对方' : '仅自己可见' : `${detail.owner.nickname} 分享` }}</span>
             <span v-if="detail.archived" class="badge gray">已归档</span>
             <span class="muted">{{ readableDate(detail.updatedAt) }}</span></div>
           <p class="detail-body">{{ detail.body }}</p>
@@ -301,15 +320,15 @@ async function retryCreatedReminder() {
             :review="reminderReview" :pending="reminderPending" prefix="memory-retry" @retry="retryCreatedReminder" />
           <ReminderEditor :key="detail.id" resource-type="MEMORY_CARD" :resource-id="detail.id"
             :reminder="detail.myReminder" @changed="reminderChanged" />
-          <div v-if="confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
+          <div v-if="isMine(detail) && confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
             <button class="btn danger mt-16" :disabled="operationPending" @click="removeMemory">确认删除</button>
             <button class="text-button" @click="confirmDelete = false">再想一下</button></div>
-          <div v-else class="dialog-actions"><button class="text-button danger" @click="confirmDelete = true">删除</button>
-            <button class="btn secondary" :disabled="operationPending" @click="toggleArchived">
+          <div v-else class="dialog-actions"><button v-if="isMine(detail)" class="text-button danger" @click="confirmDelete = true">删除</button>
+            <button v-if="isMine(detail)" class="btn secondary" :disabled="operationPending" @click="toggleArchived">
               {{ detail.archived ? '恢复到记忆' : '归档' }}</button>
             <RouterLink class="btn soft" :to="`/commitments?new=1&sourceType=MEMORY_CARD&sourceId=${encodeURIComponent(detail.id)}`">
               写下我的下一步</RouterLink>
-            <button class="btn primary" @click="editMemory">编辑卡片</button></div>
+            <button v-if="isMine(detail)" class="btn primary" @click="editMemory">编辑卡片</button></div>
         </template>
         <p v-if="detailError" class="form-error mt-16" role="alert">{{ detailError }}</p>
       </div>
@@ -334,7 +353,7 @@ async function retryCreatedReminder() {
           :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
           v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
         <p v-else class="field-help">要调整私人提醒，请先保存卡片，再在详情中设置。</p>
-        <div class="inline-note">这张卡片只对你自己可见。分享功能仍待后端支持；提醒只发给自己。</div>
+        <div class="inline-note">新卡片默认只对你自己可见；提醒只发给自己。</div>
         <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
         <div v-if="latestVersion" class="inline-note peach"><p>卡片在其他位置发生了变化。当前输入已保留。</p>
           <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>

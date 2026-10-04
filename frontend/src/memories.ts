@@ -7,6 +7,17 @@ export type SourceType = 'EXPLICIT' | 'OBSERVED' | 'INTERPRETATION'
 export type MemoryScope = 'ALL' | 'MINE' | 'PARTNER'
 export type FollowUpMode = 'NONE' | 'IN_APP' | 'IN_APP_AND_MAIL'
 export interface MemoryNotificationSetting { followUpMode: FollowUpMode; version: string | null }
+export interface MemoryNotificationCapabilities {
+  selfMailAvailable: boolean
+  otherMailAvailable: boolean
+  effectiveOutgoingMode: FollowUpMode | null
+}
+export interface MemorySharePlan { outgoingMode: FollowUpMode; followUpMode: FollowUpMode }
+export interface MemoryShareWrite {
+  connectionId: string
+  expectedVersion: string
+  notificationPlan: MemorySharePlan
+}
 
 export const categoryLabels: Record<MemoryCategory, string> = {
   INTEREST: '喜好兴趣', RECENT_CONCERN: '近期关注', RELATIONSHIP_PREFERENCE: '相处偏好',
@@ -99,4 +110,20 @@ export function setMemoryArchived(id: string, expectedVersion: string, archived:
 
 export function deleteMemory(id: string, expectedVersion: string): Promise<void> {
   return request<void>('DELETE', `/memories/${encodeURIComponent(id)}`, { expectedVersion })
+}
+
+export function getShareCapabilities(connectionId: string): Promise<MemoryNotificationCapabilities> {
+  return request<MemoryNotificationCapabilities>('GET',
+    `/notification-capabilities?${query({ connectionId })}`)
+}
+
+export function shareMemory(id: string, body: MemoryShareWrite,
+  idempotencyKey: string): Promise<MemoryDetail> {
+  return request<MemoryDetail>('POST', `/memories/${encodeURIComponent(id)}/share`, body,
+    { idempotencyKey })
+}
+
+export function unshareMemory(id: string, expectedVersion: string): Promise<MemoryDetail> {
+  return request<MemoryDetail>('DELETE', `/memories/${encodeURIComponent(id)}/share`,
+    { expectedVersion })
 }

@@ -6,11 +6,13 @@ import BaseDialog from '../components/BaseDialog.vue'
 import ReminderEditor from '../components/ReminderEditor.vue'
 import ReminderDraftFields from '../components/ReminderDraftFields.vue'
 import ReminderRecovery from '../components/ReminderRecovery.vue'
+import MemoryShareControls from '../components/MemoryShareControls.vue'
 import { ApiError, errorMessage } from '../api'
 import { categoryLabels, createMemory, deleteMemory, getMemory, listMemories,
   patchMemory, setMemoryArchived, sourceLabels } from '../memories'
 import type { MemoryCategory, MemoryDetail, MemoryScope, MemorySummary, MemoryWrite, SourceType } from '../memories'
 import { session } from '../session'
+import { refreshUnread } from '../unread'
 import { useCreatedReminder } from '../useCreatedReminder'
 
 const route = useRoute()
@@ -42,6 +44,7 @@ const detail = ref<MemoryDetail | null>(null)
 const detailLoading = ref(false)
 const detailError = ref('')
 const operationPending = ref(false)
+const shareBusy = ref(false)
 const confirmDelete = ref(false)
 const latestVersion = ref<string | null>(null)
 const editVersion = ref('')
@@ -108,7 +111,7 @@ function isMine(memory: Pick<MemorySummary, 'ownerId'>): boolean {
 }
 
 function closeDialog() {
-  if (operationPending.value) return
+  if (operationPending.value || shareBusy.value) return
   mode.value = null
   detailError.value = ''
   confirmDelete.value = false
@@ -249,6 +252,12 @@ function reminderChanged(value: MemoryDetail['myReminder']) {
   if (detail.value) detail.value = { ...detail.value, myReminder: value }
   if (value) clearPendingReminder()
 }
+function memoryUpdated(value: MemoryDetail) {
+  if (detail.value?.id !== value.id) return
+  detail.value = value
+  void load(1)
+  void refreshUnread()
+}
 async function retryCreatedReminder() {
   const reminder = await retryReminder()
   if (detail.value && reminder) detail.value = { ...detail.value, myReminder: reminder }
@@ -302,7 +311,7 @@ async function retryCreatedReminder() {
       @click="load(page + 1)">{{ loadingMore ? '正在加载…' : '再翻 9 张记忆' }}</button></div>
 
     <BaseDialog :open="mode !== null" :title="mode === 'create' ? '记一张卡片' : mode === 'edit' ? '编辑记忆' : detail?.title || '记忆详情'"
-      :wide="true" :busy="operationPending" @close="closeDialog">
+      :wide="true" :busy="operationPending || shareBusy" @close="closeDialog">
       <div v-if="mode === 'detail'">
         <div v-if="detailLoading" class="loading-state" role="status">正在读取卡片…</div>
         <template v-else-if="detail">
@@ -320,6 +329,8 @@ async function retryCreatedReminder() {
             :review="reminderReview" :pending="reminderPending" prefix="memory-retry" @retry="retryCreatedReminder" />
           <ReminderEditor :key="detail.id" resource-type="MEMORY_CARD" :resource-id="detail.id"
             :reminder="detail.myReminder" @changed="reminderChanged" />
+          <MemoryShareControls v-if="isMine(detail)" :key="detail.id" :memory="detail"
+            @updated="memoryUpdated" @busy="shareBusy = $event" />
           <div v-if="isMine(detail) && confirmDelete" class="inline-note peach mt-16"><p>删除后，这张卡片将无法从页面恢复。确定删除？</p>
             <button class="btn danger mt-16" :disabled="operationPending" @click="removeMemory">确认删除</button>
             <button class="text-button" @click="confirmDelete = false">再想一下</button></div>

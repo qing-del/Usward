@@ -41,7 +41,8 @@ describe('shared memory comments', () => {
         selfMailAvailable: false, otherMailAvailable: false, effectiveOutgoingMode: 'IN_APP',
       }))
       if (path.includes('/comments?')) return Promise.resolve(json(path.includes('page=2')
-        ? commentPage(2, posted ? 6 : 5, posted ? 26 : 25) : commentPage(1, 20, 25)))
+        ? commentPage(2, posted ? 6 : 5, posted ? 26 : 25)
+        : commentPage(1, 20, posted ? 26 : 25)))
       if (path.endsWith('/comments') && init?.method === 'POST') {
         posted = true
         return Promise.resolve(json({ comment: comment(26), memoryVersion: '8' }))
@@ -63,6 +64,8 @@ describe('shared memory comments', () => {
     expect(JSON.parse(post[1].body)).toEqual({ expectedVersion: '7', body: '我记得另一种颜色' })
     expect(post[1].headers.get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/)
     expect(wrapper.emitted('updated')?.at(-1)?.[0]).toMatchObject({ version: '8', body: '作者的原文' })
+    expect(wrapper.findAll('.memory-comments-list li')).toHaveLength(20)
+    expect(wrapper.text()).toContain('补充与更正 26')
     wrapper.unmount()
   })
 

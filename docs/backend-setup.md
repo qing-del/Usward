@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、私人记忆卡片、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读、个人今日聚合、连接邀请与解除，以及脱敏忙闲查询。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、共享记忆卡片与补充更正、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读、个人今日聚合、连接邀请与解除，以及脱敏忙闲查询。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些已实现接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 登录后调用 `POST /connection-invites` 可生成一次性口令，创建响应仅此一次包含 `token`。`GET /connection` 只返回当前连接和本人尚未过期的待发邀请元数据。另一账号通过 `POST /connection-invites/preview` 提交 `{ "token": "…" }` 查看邀请者公开摘要，再通过 `POST /connection-invites/accept` 提交 `{ "token": "…", "expectedVersion": "0" }` 主动接受。邀请者可用 `POST /connection-invites/{id}/revoke` 和 `{ "expectedVersion": "0" }` 撤销；口令不进入 URL，绑定不会自动分享个人内容。所有写操作继续使用登录 Session 的 CSRF 令牌。
 

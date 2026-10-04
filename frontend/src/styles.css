@@ -231,6 +231,19 @@ small { font-size: 12px; }
 .detail-tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 15px 0; }
 .detail-line { display: flex; gap: 12px; border-top: 1px solid var(--line); padding: 10px 0; font-size: 12px; }
 .detail-line strong { flex: none; min-width: 67px; color: #6d766d; }
+.memory-share-section, .memory-followup-section, .memory-comments-section {
+  min-width: 0; border-top: 1px solid var(--line); padding-top: 18px; margin-top: 20px;
+}
+.memory-share-section .section-heading, .memory-followup-section .section-heading,
+.memory-comments-section .section-heading { flex-wrap: wrap; }
+.memory-share-preview { min-width: 0; display: grid; gap: 8px; }
+.memory-share-preview > strong { font-size: 18px; overflow-wrap: anywhere; }
+.memory-share-preview p, .memory-comments-list p { overflow-wrap: anywhere; }
+.memory-comments-list { display: grid; gap: 10px; padding: 0; margin: 14px 0 0; list-style: none; }
+.memory-comments-list li { min-width: 0; padding: 12px 14px; border-radius: 11px; background: #f5f6ef; }
+.memory-comments-list li:nth-child(even) { background: #faf5f1; }
+.memory-comments-list .detail-meta { justify-content: space-between; margin-bottom: 6px; }
+.memory-comments-list .detail-body { margin: 0; }
 
 .commitment-intro { display: flex; align-items: center; gap: 14px; border: 1px solid #e7e6d8;
   border-radius: 15px; background: #f4f2e8; padding: 15px 19px; margin-bottom: 20px; }

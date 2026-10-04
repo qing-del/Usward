@@ -150,6 +150,56 @@ describe('private memories', () => {
     expect(wrapper.text()).toContain('对方共享的正文')
     expect(wrapper.find('.dialog-actions .primary').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('删除')
+    expect(wrapper.find('.reminder-editor').exists()).toBe(true)
+    expect(wrapper.find('a[href="/commitments?new=1&sourceType=MEMORY_CARD&sourceId=2"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('clears an open card and its draft immediately when the account changes', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.endsWith('/memories/1')) return Promise.resolve(json(detail))
+      return Promise.resolve(json(page(session.user?.id === '1' ? [summary] : [], 1)))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { wrapper } = await mountedPage()
+    await flushPromises()
+    await wrapper.get('.memory-open').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain(detail.body)
+    session.user = { ...user, id: '2', username: 'bob', nickname: 'Bob' }
+    await flushPromises()
+    expect(wrapper.text()).not.toContain(detail.body)
+    expect(wrapper.find('.reminder-editor').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('removes a partner body from view when a current-share request loses access', async () => {
+    const partner = { ...summary, id: '2', ownerId: '2',
+      owner: { id: '2', nickname: 'Bob', avatarStyle: 'FLOWER' }, sharedConnectionId: '11' }
+    let listed = false
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.includes('/comments?')) return Promise.resolve(json({ code: 'MEMORY_NOT_FOUND',
+        message: '卡片不可访问' }, 404))
+      if (path.includes('/notification-capabilities')) return Promise.resolve(json({
+        selfMailAvailable: false, otherMailAvailable: false, effectiveOutgoingMode: 'IN_APP',
+      }))
+      if (path.includes('/notification-settings/MEMORY_CARD/2')) return Promise.resolve(json({
+        resourceType: 'MEMORY_CARD', resourceId: '2', followUpMode: 'IN_APP', version: '1',
+      }))
+      if (path.endsWith('/memories/2')) return Promise.resolve(json({ ...partner,
+        body: '不应继续显示', sourceDate: null, nextAction: null, archived: null,
+        myReminder: null, myNotificationSetting: { followUpMode: 'IN_APP', version: '1' } }))
+      const result = page(listed ? [] : [partner], 1)
+      listed = true
+      return Promise.resolve(json(result))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { wrapper } = await mountedPage('/memories?scope=PARTNER')
+    await flushPromises()
+    await wrapper.get('.memory-open').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('不应继续显示')
+    expect(wrapper.text()).toContain('已不可访问')
     wrapper.unmount()
   })
 

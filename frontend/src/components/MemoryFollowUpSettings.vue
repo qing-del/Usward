@@ -9,7 +9,8 @@ import { session } from '../session'
 
 const props = defineProps<{ memoryId: string; isOwner: boolean;
   setting: MemoryNotificationSetting | null }>()
-const emit = defineEmits<{ changed: [value: MemoryNotificationSetting]; unavailable: [] }>()
+const emit = defineEmits<{ changed: [value: MemoryNotificationSetting]; unavailable: [id: string];
+  busy: [value: boolean] }>()
 
 const current = ref<MemoryNotificationSettingDetail | null>(null)
 const latest = ref<MemoryNotificationSettingDetail | null>(null)
@@ -22,6 +23,7 @@ const reviewRequired = ref(false)
 const error = ref('')
 const notice = ref('')
 let sequence = 0
+watch([loading, pending], () => emit('busy', loading.value || pending.value))
 
 function label(mode: FollowUpMode): string {
   return mode === 'NONE' ? '不通知' : mode === 'IN_APP' ? '站内通知' : '站内及邮件（历史设置）'
@@ -47,7 +49,7 @@ async function load(review = false) {
   } catch (cause) {
     if (run !== sequence || session.user?.id !== userId) return
     if (cause instanceof ApiError && (cause.status === 404 || cause.status === 400)) {
-      emit('unavailable')
+      emit('unavailable', id)
     } else error.value = errorMessage(cause)
   } finally { if (run === sequence) loading.value = false }
 }
@@ -111,9 +113,10 @@ async function save() {
     if (session.user?.id !== userId) return
     error.value = errorMessage(cause)
     if (cause instanceof ApiError && (cause.code === 'NOTIFICATION_SETTING_CONFLICT'
-      || cause.code === 'NETWORK_ERROR')) {
+      || cause.code === 'NETWORK_ERROR' || cause.status >= 500)) {
+      reviewRequired.value = true
       await load(true)
-    } else if (cause instanceof ApiError && cause.status === 404) emit('unavailable')
+    } else if (cause instanceof ApiError && cause.status === 404) emit('unavailable', props.memoryId)
   } finally { pending.value = false }
 }
 </script>

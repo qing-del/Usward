@@ -8,7 +8,7 @@ import type { MemoryDetail, MemoryNotificationCapabilities, MemoryShareWrite } f
 import { session } from '../session'
 
 const props = defineProps<{ memory: MemoryDetail }>()
-const emit = defineEmits<{ updated: [value: MemoryDetail]; busy: [value: boolean] }>()
+const emit = defineEmits<{ updated: [value: MemoryDetail]; busy: [value: boolean]; unavailable: [id: string] }>()
 type ShareAttempt = { key: string; body: MemoryShareWrite }
 
 const step = ref<'idle' | 'share' | 'unshare'>('idle')
@@ -61,7 +61,10 @@ async function refreshMemory(): Promise<MemoryDetail | null> {
     emit('updated', latest)
     return latest
   } catch (cause) {
-    if (session.user?.id === userId) error.value = errorMessage(cause)
+    if (session.user?.id === userId) {
+      if (cause instanceof ApiError && cause.status === 404) emit('unavailable', id)
+      else error.value = errorMessage(cause)
+    }
     return null
   }
 }
@@ -101,6 +104,7 @@ function shared(saved: MemoryDetail, message: string) {
 async function verifyShare() {
   const attempt = uncertain.value
   if (!attempt || loading.value) return
+  const userId = session.user?.id
   loading.value = true
   retryVerified.value = false
   const latest = await refreshMemory()
@@ -115,6 +119,7 @@ async function verifyShare() {
     } else {
       try {
         const current = await getConnection()
+        if (session.user?.id !== userId) { loading.value = false; return }
         if (current.connection?.id !== attempt.body.connectionId) {
           uncertain.value = null
           step.value = 'idle'
@@ -139,17 +144,23 @@ async function submitShare(retry = false) {
     notificationPlan: { outgoingMode: draft.outgoingMode, followUpMode: draft.followUpMode },
   }
   const attempt: ShareAttempt = retry ? uncertain.value! : { key: crypto.randomUUID(), body }
+  const userId = session.user?.id
+  const id = props.memory.id
   pending.value = true
   error.value = ''
   retryVerified.value = false
   try {
-    const saved = await shareMemory(props.memory.id, attempt.body, attempt.key)
+    const saved = await shareMemory(id, attempt.body, attempt.key)
+    if (session.user?.id !== userId || props.memory.id !== id) return
     shared(saved, '卡片已分享给当前连接。')
   } catch (cause) {
-    if (cause instanceof ApiError && cause.code === 'NETWORK_ERROR') {
+    if (session.user?.id !== userId || props.memory.id !== id) return
+    if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status >= 500)) {
       uncertain.value = attempt
       error.value = '分享结果尚不确定。请先读取卡片状态，再决定是否用原请求重试。'
       await verifyShare()
+    } else if (cause instanceof ApiError && cause.code === 'MAIL_NOT_AVAILABLE') {
+      error.value = '邮件发送尚未启用。请改选站内通知或不通知，再确认分享。'
     } else if (cause instanceof ApiError && (cause.status === 409 || cause.status === 404)) {
       uncertain.value = null
       step.value = 'idle'
@@ -164,11 +175,15 @@ async function submitUnshare() {
   pending.value = true
   error.value = ''
   const version = props.memory.version
+  const userId = session.user?.id
+  const id = props.memory.id
   try {
-    const saved = await unshareMemory(props.memory.id, version)
+    const saved = await unshareMemory(id, version)
+    if (session.user?.id !== userId || props.memory.id !== id) return
     shared(saved, '分享已撤销，对方不再能查看这张卡片。')
   } catch (cause) {
-    if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR'
+    if (session.user?.id !== userId || props.memory.id !== id) return
+    if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status >= 500
       || cause.status === 409 || cause.status === 404)) {
       const latest = await refreshMemory()
       if (latest?.sharedConnectionId === null) shared(latest, '已核实卡片目前未分享。')

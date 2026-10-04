@@ -62,4 +62,27 @@ describe('shared memory notification setting', () => {
     expect(wrapper.emitted('changed')?.at(-1)?.[0]).toEqual({ followUpMode: 'NONE', version: '3' })
     wrapper.unmount()
   })
+
+  it('uses null only for a setting that has not yet been created', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/auth/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf' }))
+      if (path.includes('/notification-capabilities')) return Promise.resolve(json({
+        selfMailAvailable: false, otherMailAvailable: false, effectiveOutgoingMode: 'IN_APP',
+      }))
+      if (init?.method === 'PUT') return Promise.resolve(json({ ...setting, followUpMode: 'NONE' }))
+      return Promise.resolve(json({ ...setting, version: null }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const wrapper = mount(MemoryFollowUpSettings, { props: {
+      memoryId: '8', isOwner: false, setting: { followUpMode: 'IN_APP', version: null },
+    } })
+    await flushPromises()
+    await wrapper.get('button').trigger('click')
+    await wrapper.get('#memory-followup-mode').setValue('NONE')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const put = fetchMock.mock.calls.find(call => call[1]?.method === 'PUT')!
+    expect(JSON.parse(put[1].body)).toEqual({ followUpMode: 'NONE', expectedVersion: null })
+    wrapper.unmount()
+  })
 })

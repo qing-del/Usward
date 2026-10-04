@@ -41,6 +41,7 @@ const loadingMore = ref(false)
 const listError = ref('')
 let abort: AbortController | null = null
 let sequence = 0
+let detailSequence = 0
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 
 const mode = ref<'create' | 'detail' | 'edit' | null>(null)
@@ -49,12 +50,14 @@ const detailLoading = ref(false)
 const detailError = ref('')
 const operationPending = ref(false)
 const shareBusy = ref(false)
+const settingBusy = ref(false)
 const commentBusy = ref(false)
+const detailViewerId = ref<string | null>(null)
 const confirmDelete = ref(false)
 const latestVersion = ref<string | null>(null)
 const latestDetail = ref<MemoryDetail | null>(null)
 const editVersion = ref('')
-type EditAttempt = { id: string; version: string; write: MemoryWrite; key: string;
+type EditAttempt = { id: string; actorId: string | null; version: string; write: MemoryWrite; key: string;
   sharedConnectionId: string | null; notificationOverride?: MemoryNotificationOverride }
 const editKey = ref<string | null>(null)
 const editUncertain = ref<EditAttempt | null>(null)
@@ -119,6 +122,33 @@ watch(() => route.query.memory, value => {
   }
 })
 watch(() => [route.query.scope, route.query.archived], () => { view.value = routeView() })
+watch(() => session.user?.id, (id, previous) => {
+  if (id === previous) return
+  abort?.abort()
+  sequence++
+  detailSequence++
+  items.value = []
+  total.value = 0
+  tags.value = []
+  loading.value = false
+  loadingMore.value = false
+  detailLoading.value = false
+  shareBusy.value = false
+  settingBusy.value = false
+  commentBusy.value = false
+  detail.value = null
+  detailViewerId.value = null
+  mode.value = null
+  Object.assign(draft, { title: '', body: '', category: '', tagsText: '',
+    sourceType: 'INTERPRETATION', sourceDate: '', nextAction: '' })
+  editKey.value = null
+  editUncertain.value = null
+  editOverrideToken.value = null
+  latestDetail.value = null
+  latestVersion.value = null
+  resetCreatedReminder()
+  if (id) void load(1)
+})
 watch(() => session.reauthRequired, (required, wasRequired) => {
   if (wasRequired && !required && mode.value === 'edit' && detail.value) {
     editKey.value = null
@@ -128,14 +158,15 @@ watch(() => session.reauthRequired, (required, wasRequired) => {
     void latestForEdit('重新登录后请核对最新卡片和通知方式，再保存输入。')
   }
 })
-onBeforeUnmount(() => { abort?.abort(); if (searchTimer) clearTimeout(searchTimer) })
+onBeforeUnmount(() => { abort?.abort(); detailSequence++; if (searchTimer) clearTimeout(searchTimer) })
 
 function isMine(memory: Pick<MemorySummary, 'ownerId'>): boolean {
   return memory.ownerId === session.user?.id
 }
 
 function closeDialog() {
-  if (operationPending.value || shareBusy.value || commentBusy.value) return
+  if (operationPending.value || shareBusy.value || settingBusy.value || commentBusy.value) return
+  detailSequence++
   mode.value = null
   detailError.value = ''
   confirmDelete.value = false
@@ -144,9 +175,14 @@ function closeDialog() {
 }
 
 function newMemory() {
+  detailSequence++
+  shareBusy.value = false
+  settingBusy.value = false
+  commentBusy.value = false
   Object.assign(draft, { title: '', body: '', category: '', tagsText: '',
     sourceType: 'INTERPRETATION', sourceDate: '', nextAction: '' })
   detail.value = null
+  detailViewerId.value = session.user?.id ?? null
   detailError.value = ''
   latestVersion.value = null
   latestDetail.value = null
@@ -155,16 +191,28 @@ function newMemory() {
 }
 
 async function openMemory(id: string) {
+  const userId = session.user?.id
+  const run = ++detailSequence
   mode.value = 'detail'
   detail.value = null
+  shareBusy.value = false
+  settingBusy.value = false
+  commentBusy.value = false
+  detailViewerId.value = userId ?? null
   detailError.value = ''
   detailLoading.value = true
   confirmDelete.value = false
-  try { detail.value = await getMemory(id) }
+  try {
+    const value = await getMemory(id)
+    if (run === detailSequence && session.user?.id === userId) detail.value = value
+  }
   catch (cause) {
-    detailError.value = cause instanceof ApiError && cause.status === 404
-      ? '这张卡片已不可访问。请返回列表查看最新内容。' : errorMessage(cause)
-  } finally { detailLoading.value = false }
+    if (run === detailSequence && session.user?.id === userId) {
+      detailError.value = cause instanceof ApiError && cause.status === 404
+        ? '这张卡片已不可访问。请返回列表查看最新内容。' : errorMessage(cause)
+      if (cause instanceof ApiError && cause.status === 404) void load(1)
+    }
+  } finally { if (run === detailSequence) detailLoading.value = false }
 }
 
 function editMemory() {
@@ -271,8 +319,10 @@ async function persistEdit(attempt: EditAttempt) {
   try {
     const saved = await patchMemory(attempt.id, attempt.version, attempt.write,
       attempt.key, attempt.notificationOverride)
+    if (session.user?.id !== attempt.actorId) return
     await savedEdit(saved)
   } catch (cause) {
+    if (session.user?.id !== attempt.actorId) return
     if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status >= 500)) {
       editUncertain.value = attempt
       detailError.value = '保存结果尚不确定。请先读取最新卡片，再决定是否用原请求重试。'
@@ -289,7 +339,7 @@ async function persistEdit(attempt: EditAttempt) {
       editOverrideToken.value = null
       await latestForEdit('卡片或通知设置已变化。输入已保留，请核对最新内容。')
     } else if (cause instanceof ApiError && cause.status === 404) {
-      await memoryUnavailable()
+      await memoryUnavailable(attempt.id)
     } else detailError.value = errorMessage(cause)
   } finally { operationPending.value = false }
 }
@@ -315,7 +365,8 @@ async function saveMemory(useOverride = false) {
     if (!!editOverrideToken.value !== useOverride) return
     const key = editKey.value ?? crypto.randomUUID()
     editKey.value = key
-    await persistEdit({ id: detail.value.id, version: editVersion.value, write, key,
+    await persistEdit({ id: detail.value.id, actorId: session.user?.id ?? null,
+      version: editVersion.value, write, key,
       sharedConnectionId: detail.value.sharedConnectionId,
       ...(useOverride ? { notificationOverride: { mode: editOverrideMode.value,
         token: editOverrideToken.value! } } : {}) })
@@ -327,17 +378,22 @@ async function saveMemory(useOverride = false) {
     catch (cause) { detailError.value = cause instanceof Error ? cause.message : '提醒时间无效。'; return }
   }
   operationPending.value = true
+  const userId = session.user?.id
   try {
     const saved = await createMemory(write)
+    if (session.user?.id !== userId) return
     detail.value = saved
     mode.value = 'detail'
     latestVersion.value = null
     if (archived.value) view.value = 'MINE'
     else await load(1)
+    if (session.user?.id !== userId) return
     const reminder = await applyCreatedReminder(saved.id, reminderPlan)
+    if (session.user?.id !== userId) return
     if (reminder) detail.value = { ...saved, myReminder: reminder }
     else if (reminderReview.value) detail.value = { ...saved, myReminder: reminderReview.value }
   } catch (cause) {
+    if (session.user?.id !== userId) return
     detailError.value = errorMessage(cause)
   } finally { operationPending.value = false }
 }
@@ -361,12 +417,16 @@ function useLatestVersion() {
 
 async function toggleArchived() {
   if (!detail.value || !isMine(detail.value) || operationPending.value) return
+  const userId = session.user?.id
   detailError.value = ''
   operationPending.value = true
   try {
-    detail.value = await setMemoryArchived(detail.value.id, detail.value.version, !detail.value.archived)
+    const saved = await setMemoryArchived(detail.value.id, detail.value.version, !detail.value.archived)
+    if (session.user?.id !== userId) return
+    detail.value = saved
     await load(1)
   } catch (cause) {
+    if (session.user?.id !== userId) return
     detailError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
       try { detail.value = await getMemory(detail.value.id) } catch { /* Keep the error visible. */ }
@@ -376,13 +436,16 @@ async function toggleArchived() {
 
 async function removeMemory() {
   if (!detail.value || !isMine(detail.value) || operationPending.value) return
+  const userId = session.user?.id
   detailError.value = ''
   operationPending.value = true
   try {
     await deleteMemory(detail.value.id, detail.value.version)
+    if (session.user?.id !== userId) return
     closeDialogAfterDelete()
     await load(1)
   } catch (cause) {
+    if (session.user?.id !== userId) return
     detailError.value = errorMessage(cause)
     if (cause instanceof ApiError && cause.code === 'VERSION_CONFLICT' && detail.value) {
       try { detail.value = await getMemory(detail.value.id) } catch { /* Keep the error visible. */ }
@@ -401,31 +464,44 @@ function readableDate(value: string): string {
     year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(value))
 }
 function reminderChanged(value: MemoryDetail['myReminder']) {
-  if (detail.value) detail.value = { ...detail.value, myReminder: value }
+  if (session.user?.id === detailViewerId.value && detail.value) {
+    detail.value = { ...detail.value, myReminder: value }
+  }
   if (value) clearPendingReminder()
 }
 function memoryUpdated(value: MemoryDetail) {
-  if (detail.value?.id !== value.id) return
+  if (session.user?.id !== detailViewerId.value || detail.value?.id !== value.id) return
   detail.value = value
   void load(1)
   void refreshUnread()
 }
 function settingChanged(value: MemoryNotificationSetting) {
-  if (detail.value) detail.value = { ...detail.value, myNotificationSetting: value }
+  if (session.user?.id === detailViewerId.value && detail.value) {
+    detail.value = { ...detail.value, myNotificationSetting: value }
+  }
 }
-async function memoryUnavailable() {
-  if (!detail.value) return
+async function memoryUnavailable(id: string) {
+  if (!detail.value || detail.value.id !== id) return
+  const userId = session.user?.id
+  shareBusy.value = false
+  settingBusy.value = false
+  commentBusy.value = false
   if (!isMine(detail.value)) {
     detail.value = null
     detailError.value = '这张分享卡片已不可访问。请查看最新列表。'
   } else {
-    try { detail.value = await getMemory(detail.value.id) }
+    try {
+      const latest = await getMemory(detail.value.id)
+      if (session.user?.id !== userId) return
+      detail.value = latest
+    }
     catch {
+      if (session.user?.id !== userId) return
       detail.value = null
       detailError.value = '这张卡片已不可访问。请查看最新列表。'
     }
   }
-  await load(1)
+  if (session.user?.id === userId) await load(1)
 }
 async function retryCreatedReminder() {
   const reminder = await retryReminder()
@@ -480,7 +556,7 @@ async function retryCreatedReminder() {
       @click="load(page + 1)">{{ loadingMore ? '正在加载…' : '再翻 9 张记忆' }}</button></div>
 
     <BaseDialog :open="mode !== null" :title="mode === 'create' ? '记一张卡片' : mode === 'edit' ? '编辑记忆' : detail?.title || '记忆详情'"
-      :wide="true" :busy="operationPending || shareBusy || commentBusy" @close="closeDialog">
+      :wide="true" :busy="operationPending || shareBusy || settingBusy || commentBusy" @close="closeDialog">
       <div v-if="mode === 'detail'">
         <div v-if="detailLoading" class="loading-state" role="status">正在读取卡片…</div>
         <template v-else-if="detail">
@@ -499,10 +575,10 @@ async function retryCreatedReminder() {
           <ReminderEditor :key="detail.id" resource-type="MEMORY_CARD" :resource-id="detail.id"
             :reminder="detail.myReminder" @changed="reminderChanged" />
           <MemoryShareControls v-if="isMine(detail)" :key="detail.id" :memory="detail"
-            @updated="memoryUpdated" @busy="shareBusy = $event" />
+            @updated="memoryUpdated" @busy="shareBusy = $event" @unavailable="memoryUnavailable" />
           <MemoryFollowUpSettings v-if="detail.sharedConnectionId" :key="detail.id"
             :memory-id="detail.id" :is-owner="isMine(detail)" :setting="detail.myNotificationSetting"
-            @changed="settingChanged" @unavailable="memoryUnavailable" />
+            @changed="settingChanged" @unavailable="memoryUnavailable" @busy="settingBusy = $event" />
           <MemoryComments v-if="detail.sharedConnectionId" :key="detail.id" :memory="detail"
             :is-owner="isMine(detail)" @updated="memoryUpdated" @unavailable="memoryUnavailable"
             @busy="commentBusy = $event" />
@@ -539,13 +615,17 @@ async function retryCreatedReminder() {
           :mail-available="mailAvailable" v-model:mode="reminderDraft.mode"
           v-model:local="reminderDraft.local" v-model:offset="reminderDraft.offset" />
         <p v-else class="field-help">要调整私人提醒，请先保存卡片，再在详情中设置。</p>
-        <div class="inline-note">新卡片默认只对你自己可见；提醒只发给自己。</div>
+        <div v-if="mode === 'create'" class="inline-note">新卡片默认只对你自己可见；提醒只发给自己。</div>
+        <div v-else class="inline-note">私人提醒只发给自己；若这张卡片已分享，修改原文会按对方保存的方式通知对方。</div>
         <p v-if="mode === 'edit' && editCapabilitiesLoading" class="field-help">正在确认本次编辑的通知方式…</p>
         <p v-if="mode === 'edit' && editCapabilities?.effectiveOutgoingMode" class="field-help">
           对方目前选择：{{ editCapabilities.effectiveOutgoingMode === 'NONE' ? '不接收后续通知' : editCapabilities.effectiveOutgoingMode === 'IN_APP' ? '接收站内通知' : '历史邮件方式；保存时需明确改选' }}。</p>
         <p v-if="detailError" class="form-error" role="alert">{{ detailError }}</p>
         <div v-if="latestVersion && !editUncertain" class="inline-note peach"><p>卡片在其他位置发生了变化。当前输入已保留。服务端版本：{{ latestVersion }}。</p>
-          <p v-if="latestDetail" class="detail-body">最新原文：{{ latestDetail.body }}</p>
+          <template v-if="latestDetail"><p>最新标题：{{ latestDetail.title || '未命名' }} · {{ latestDetail.category ? categoryLabels[latestDetail.category] : '未分类' }}</p>
+            <p class="detail-body">最新原文：{{ latestDetail.body }}</p>
+            <p>最新标签：{{ latestDetail.tags.join('、') || '无' }} · 来源：{{ sourceLabels[latestDetail.sourceType] }}</p>
+            <p v-if="latestDetail.nextAction" class="detail-body">最新下次行动：{{ latestDetail.nextAction }}</p></template>
           <button type="button" class="text-button" @click="useLatestVersion">使用最新版本后核对并重试</button></div>
         <div v-if="editOverrideToken" class="inline-note peach"><p>邮件发送尚未启用。此次改选只影响本次编辑，不改变对方保存的方式。</p>
           <div class="field mt-8"><label for="memory-edit-override">本次怎样通知对方</label>

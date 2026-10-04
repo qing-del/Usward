@@ -281,7 +281,7 @@ defineExpose({ refresh: load })
         <p v-for="member in connection.members" :key="member.id">
           <Avatar :nickname="member.nickname" :avatar-style="member.avatarStyle" small />
           <span>{{ member.nickname }} <small>{{ member.id === session.user?.id ? '我' : '对方' }}</small></span></p>
-        <div class="inline-note mt-16">连接不会自动分享历史内容；记忆与承诺仍只属于作者。</div>
+        <div class="inline-note mt-16">连接不会自动分享历史内容；记忆卡片由作者逐张选择是否分享。</div>
         <button class="text-button danger mt-16" @click="startEnd">解除连接</button>
       </div>
       <template v-else>

@@ -7,7 +7,7 @@ import type { FollowUpMode, MemoryComment, MemoryCommentWrite, MemoryDetail } fr
 import { session } from '../session'
 
 const props = defineProps<{ memory: MemoryDetail; isOwner: boolean }>()
-const emit = defineEmits<{ updated: [value: MemoryDetail]; unavailable: []; busy: [value: boolean] }>()
+const emit = defineEmits<{ updated: [value: MemoryDetail]; unavailable: [id: string]; busy: [value: boolean] }>()
 type Attempt = { key: string; body: MemoryCommentWrite }
 
 const items = ref<MemoryComment[]>([])
@@ -88,7 +88,7 @@ async function load(targetPage: number) {
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === 'AbortError') return
     if (run !== sequence) return
-    if (cause instanceof ApiError && cause.status === 404) emit('unavailable')
+    if (cause instanceof ApiError && cause.status === 404) emit('unavailable', props.memory.id)
     else loadError.value = errorMessage(cause)
   } finally {
     if (run === sequence) { loading.value = false; loadingMore.value = false }
@@ -97,11 +97,15 @@ async function load(targetPage: number) {
 
 async function loadCapabilities() {
   if (props.isOwner) return
+  const userId = session.user?.id
+  const id = props.memory.id
   try {
-    const result = await getMemoryActionCapabilities(props.memory.id, 'MEMORY_COMMENT')
-    effectiveMode.value = result.effectiveOutgoingMode
+    const result = await getMemoryActionCapabilities(id, 'MEMORY_COMMENT')
+    if (session.user?.id === userId && props.memory.id === id) {
+      effectiveMode.value = result.effectiveOutgoingMode
+    }
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 404) emit('unavailable')
+    if (session.user?.id === userId && cause instanceof ApiError && cause.status === 404) emit('unavailable', id)
   }
 }
 
@@ -119,7 +123,7 @@ async function refreshContext(): Promise<MemoryDetail | null> {
     await loadCapabilities()
     return latest
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 404) emit('unavailable')
+    if (cause instanceof ApiError && cause.status === 404) emit('unavailable', id)
     else if (session.user?.id === userId) error.value = errorMessage(cause)
     return null
   }
@@ -146,11 +150,14 @@ function acceptLatest() {
 }
 
 async function send(attempt: Attempt) {
+  const userId = session.user?.id
+  const id = props.memory.id
   pending.value = true
   error.value = ''
   notice.value = ''
   try {
-    const created = await addMemoryComment(props.memory.id, attempt.body, attempt.key)
+    const created = await addMemoryComment(id, attempt.body, attempt.key)
+    if (session.user?.id !== userId || props.memory.id !== id) return
     emit('updated', { ...props.memory, version: created.memoryVersion })
     draft.value = ''
     actionKey.value = null
@@ -159,10 +166,11 @@ async function send(attempt: Attempt) {
     overrideToken.value = null
     reviewRequired.value = false
     notice.value = '补充已保存；卡片原文没有改变。'
-    await load(Math.max(1, Math.ceil((total.value + 1) / 20)))
+    await load(1)
     await refreshContext()
   } catch (cause) {
-    if (cause instanceof ApiError && cause.code === 'NETWORK_ERROR') {
+    if (session.user?.id !== userId || props.memory.id !== id) return
+    if (cause instanceof ApiError && (cause.code === 'NETWORK_ERROR' || cause.status >= 500)) {
       uncertain.value = attempt
       error.value = '提交结果尚不确定。请先读取服务端状态，再决定是否用原请求重试。'
       await verifyUncertain()
@@ -179,7 +187,7 @@ async function send(attempt: Attempt) {
       reviewRequired.value = true
       await refreshContext()
       error.value = '卡片或通知设置已变化。补充已保留，请核对最新内容后再提交。'
-    } else if (cause instanceof ApiError && cause.status === 404) emit('unavailable')
+    } else if (cause instanceof ApiError && cause.status === 404) emit('unavailable', id)
     else error.value = errorMessage(cause)
   } finally { pending.value = false }
 }

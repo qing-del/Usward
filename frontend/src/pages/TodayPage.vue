@@ -102,7 +102,7 @@ function waitingForScan(item: ReminderDetail, asOf: string): boolean {
           <h3>还没有卡片</h3><p>把一件值得记住的小事写下来。</p>
           <RouterLink class="btn secondary mt-16" to="/memories?new=1">记一张卡片</RouterLink></div>
         <RouterLink v-else class="recent-memory-link" :to="`/memories?memory=${encodeURIComponent(dashboard.featuredMemory.id)}`">
-          <span class="badge green">仅自己可见</span>
+          <span class="badge green">{{ dashboard.featuredMemory.sharedConnectionId ? '已分享给对方' : '仅自己可见' }}</span>
           <h3 class="serif">{{ dashboard.featuredMemory.title || '一件值得记住的小事' }}</h3>
           <p>{{ sourceLabels[dashboard.featuredMemory.sourceType] }}</p>
           <div class="memory-card-tags">{{ dashboard.featuredMemory.tags.map(tag => `# ${tag}`).join('　') }}</div>

@@ -1,10 +1,12 @@
 package com.jacolp.service;
 
 import com.jacolp.common.ApiException;
+import com.jacolp.dto.NotificationOverrideRequest;
 import com.jacolp.entity.Notification;
 import com.jacolp.entity.NotificationOperation;
 import com.jacolp.mapper.NotificationMapper;
 import com.jacolp.mapper.NotificationOperationMapper;
+import jakarta.servlet.http.HttpSession;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -24,11 +26,14 @@ public class BusinessNotificationService {
     private static final JsonMapper JSON = new JsonMapper();
     private final NotificationOperationMapper operations;
     private final NotificationMapper notifications;
+    private final NotificationOverrideStore overrides;
 
     public BusinessNotificationService(NotificationOperationMapper operations,
-                                       NotificationMapper notifications) {
+                                       NotificationMapper notifications,
+                                       NotificationOverrideStore overrides) {
         this.operations = operations;
         this.notifications = notifications;
+        this.overrides = overrides;
     }
 
     public String key(String raw) {
@@ -58,7 +63,14 @@ public class BusinessNotificationService {
     }
 
     public NotificationOperation previous(long actorId, String key, String requestHash) {
-        NotificationOperation row = operations.find(actorId, key);
+        return checked(operations.find(actorId, key), requestHash);
+    }
+
+    public NotificationOperation previousLocked(long actorId, String key, String requestHash) {
+        return checked(operations.lock(actorId, key), requestHash);
+    }
+
+    private NotificationOperation checked(NotificationOperation row, String requestHash) {
         if (row != null && !row.getRequestHash().equals(requestHash)) {
             throw new ApiException(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_REUSED",
                     "该幂等键已用于另一项请求");
@@ -96,6 +108,22 @@ public class BusinessNotificationService {
         row.setMessage(message);
         row.setDedupeKey("business:" + operation.getId() + ":" + kind + ":" + recipientId);
         notifications.insert(row);
+    }
+
+    public String followUpMode(HttpSession session, long actorId, String action, long cardId,
+                               long connectionId, long cardVersion, Long settingVersion,
+                               String savedMode, NotificationOverrideRequest override) {
+        if (override != null) {
+            return overrides.validate(session, override.token(), override.mode(), actorId,
+                    action, cardId, connectionId, cardVersion, settingVersion);
+        }
+        if ("IN_APP_AND_MAIL".equals(savedMode)) {
+            String token = overrides.issue(session, actorId, action, cardId, connectionId,
+                    cardVersion, settingVersion);
+            throw new ApiException(HttpStatus.CONFLICT, "MAIL_NOT_AVAILABLE", "邮件通知尚不可用",
+                    Map.of("overrideToken", token));
+        }
+        return savedMode;
     }
 
     public String resultRef(NotificationOperation row, String key) {

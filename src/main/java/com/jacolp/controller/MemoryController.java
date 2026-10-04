@@ -5,6 +5,7 @@ import com.jacolp.dto.MemoryDtos;
 import com.jacolp.dto.MemoryShareRequest;
 import com.jacolp.dto.MemoryWriteRequest;
 import com.jacolp.service.MemoryService;
+import jakarta.servlet.http.HttpSession;
 import java.security.Principal;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -57,8 +58,10 @@ public class MemoryController {
 
     @PatchMapping("/{id}")
     public MemoryDtos.Detail patch(@PathVariable String id, @RequestBody Map<String, Object> body,
-                                   Principal principal) {
-        return memories.patch(principal.getName(), id(id), MemoryWriteRequest.patch(body));
+                                   @RequestHeader(value = "Idempotency-Key", required = false) String key,
+                                   Principal principal, HttpSession session) {
+        return memories.patch(principal.getName(), id(id), MemoryWriteRequest.patch(body),
+                body, key, session);
     }
 
     @PostMapping("/{id}/archive")

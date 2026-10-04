@@ -14,6 +14,11 @@ public interface NotificationOperationMapper {
             + "AND idempotency_key = #{key}")
     NotificationOperation find(@Param("actorId") long actorId, @Param("key") String key);
 
+    @Select("SELECT id, actor_id, idempotency_key, request_hash, action, resource_type, "
+            + "resource_id, result_refs FROM notification_operation WHERE actor_id = #{actorId} "
+            + "AND idempotency_key = #{key} FOR UPDATE")
+    NotificationOperation lock(@Param("actorId") long actorId, @Param("key") String key);
+
     @Insert("""
             INSERT INTO notification_operation
               (actor_id, idempotency_key, request_hash, action, resource_type,

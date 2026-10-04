@@ -38,7 +38,9 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 当前连接中已分享卡片可用 `GET/PUT /notification-settings/MEMORY_CARD/{id}` 读取与修改本人的后续通知方式，PUT 接收 `followUpMode` 和字符串或 null 的 `expectedVersion`；尚无设置行时读取默认 `IN_APP、version=null`。`GET /notification-capabilities` 支持 `connectionId`，或 `resourceType=MEMORY_CARD&resourceId={id}&action=MEMORY_EDIT/MEMORY_COMMENT`。SMTP 尚未启用，能力布尔值为 false；设置邮件方式时按本人邮箱情况返回 `RECIPIENT_EMAIL_REQUIRED` 或 `MAIL_NOT_AVAILABLE`。
 
-作者用 `POST /memories/{id}/share` 主动分享，正文提交 `connectionId`、`expectedVersion`，可选 `notificationPlan={outgoingMode,followUpMode}`；同时携带 UUID 格式 `Idempotency-Key`。省略计划时双方默认站内通知，`NONE` 不产生站内通知但仍记录成功操作。`DELETE /memories/{id}/share` 携带 `expectedVersion`，返回撤销后的卡片详情。撤销会清理对方提醒、评论、双方后续设置和分享业务通知，但保留作者仍可用的私人提醒；再次分享不会恢复旧记录。补充/更正接口将在后续提交开放。
+作者用 `POST /memories/{id}/share` 主动分享，正文提交 `connectionId`、`expectedVersion`，可选 `notificationPlan={outgoingMode,followUpMode}`；同时携带 UUID 格式 `Idempotency-Key`。省略计划时双方默认站内通知，`NONE` 不产生站内通知但仍记录成功操作。`DELETE /memories/{id}/share` 携带 `expectedVersion`，返回撤销后的卡片详情。撤销会清理对方提醒、评论、双方后续设置和分享业务通知，但保留作者仍可用的私人提醒；再次分享不会恢复旧记录。
+
+当前分享双方可通过 `GET /memories/{id}/comments` 分页读取补充，默认 `sort=CREATED_ASC`；仅非作者可用 `POST /memories/{id}/comments` 追加，提交 `expectedVersion`、非空白且最多 1000 字的 `body`，以及 UUID 格式 `Idempotency-Key`。成功返回 `{comment,memoryVersion}`，卡片原文不自动修改。作者编辑已分享卡片时也必须携带 `Idempotency-Key`，按对方保存的后续通知方式发送站内通知；归档和恢复不发送。若历史设置为邮件模式，操作返回 `409 MAIL_NOT_AVAILABLE` 及 10 分钟有效的 `details.overrideToken`；用户明确改选后可在同一 Session 中携带 `notificationOverride={mode:NONE|IN_APP,token}` 重试，接收者保存的方式保持不变。凭据绑定账号、动作、卡片、连接、卡片版本及设置版本；上下文变化返回 `409 NOTIFICATION_CONTEXT_CHANGED`。
 
 `PATCH /me` 使用当前 `GET /me` 中的字符串 `version` 作为 `expectedVersion`，可修改昵称、`avatarStyle`、IANA `timezone`、`notificationEmail` 和 `shareAvailability`。邮箱使用单个地址，传 `null` 可清空；尚未提供 SMTP，因此 `mailReminderAvailable` 始终为 false。没有有效连接时不能开启忙闲共享。`POST /me/password` 接收 `{"oldPassword":"…","newPassword":"…"}`，成功返回 204 并使该账号全部 Session 失效；随后重新获取 CSRF 并登录。
 

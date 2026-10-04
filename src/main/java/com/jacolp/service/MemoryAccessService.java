@@ -74,7 +74,8 @@ public class MemoryAccessService {
         AppUser second = users.lockById(pair.getUserBId());
         MemoryCard locked = memories.lockById(cardId);
         AppUser viewer = first != null && first.getId() == viewerId ? first : second;
-        AppUser author = first != null && first.getId() == candidate.getOwnerId() ? first : second;
+        AppUser author = first != null && first.getId().equals(candidate.getOwnerId())
+                ? first : second;
         return locked != null && locked.getOwnerId().equals(candidate.getOwnerId())
                 && connectionId.equals(locked.getSharedConnectionId())
                 && matches(pair, viewer, author, connectionId) ? locked : null;

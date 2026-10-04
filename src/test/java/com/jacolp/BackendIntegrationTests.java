@@ -1913,6 +1913,290 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void commentsAreCurrentShareOnlyPaginatedAndSharedEditsNotifyByRecipientChoice() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"original card\"}").body()).path("id").asText();
+        String sharePath = "/memories/" + id + "/share";
+        String commentsPath = "/memories/" + id + "/comments";
+        assertEquals(200, alice.writeWithKey("POST", sharePath,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"IN_APP\"}}", UUID.randomUUID().toString())
+                .statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", commentsPath, null, null)
+                .body()).path("total").asInt());
+        assertEquals(404, alice.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"1\",\"body\":\"author comment\"}",
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(400, bob.write("POST", commentsPath,
+                "{\"expectedVersion\":\"1\",\"body\":\"missing key\"}").statusCode());
+        assertEquals(400, bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"1\",\"body\":\" \"}",
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(400, bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"1\",\"body\":\"ok\",\"authorId\":\"1\"}",
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(409, bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"0\",\"body\":\"stale\"}",
+                UUID.randomUUID().toString()).statusCode());
+        String firstBody = "{\"expectedVersion\":\"1\",\"body\":\"correction 0\"}";
+        assertEquals(403, bob.call("POST", commentsPath, firstBody, null,
+                UUID.randomUUID().toString()).statusCode());
+        String firstKey = UUID.randomUUID().toString();
+        JsonNode first = JSON.readTree(bob.writeWithKey("POST", commentsPath, firstBody,
+                firstKey).body());
+        assertEquals("2", first.path("memoryVersion").asText());
+        assertEquals("Bob", first.path("comment").path("author").path("nickname").asText());
+        assertEquals(200, bob.writeWithKey("POST", commentsPath, firstBody, firstKey).statusCode());
+        assertEquals(409, bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"2\",\"body\":\"another\"}", firstKey)
+                .statusCode());
+        for (int index = 1; index < 25; index++) {
+            int version = index + 1;
+            HttpResponse<String> added = bob.writeWithKey("POST", commentsPath,
+                    "{\"expectedVersion\":\"" + version + "\",\"body\":\"correction "
+                            + index + "\"}", UUID.randomUUID().toString());
+            assertEquals(200, added.statusCode(), added.body());
+        }
+        JsonNode secondPage = JSON.readTree(bob.call("GET", commentsPath
+                + "?page=2&size=20", null, null).body());
+        assertEquals(25, secondPage.path("total").asInt());
+        assertEquals(5, secondPage.path("items").size());
+        assertEquals("correction 20", secondPage.path("items").get(0).path("body").asText());
+        assertEquals("original card", JSON.readTree(alice.call("GET", "/memories/" + id,
+                null, null).body()).path("body").asText());
+        assertEquals(25, JSON.readTree(alice.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
+                + "WHERE message LIKE '%correction%'", Integer.class));
+        assertEquals(200, bob.write("PUT", "/notification-settings/MEMORY_CARD/" + id,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":\"1\"}").statusCode());
+        assertEquals(400, alice.write("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"26\",\"body\":\"edited\"}").statusCode());
+        String editBody = "{\"expectedVersion\":\"26\",\"body\":\"edited\"}";
+        String editKey = UUID.randomUUID().toString();
+        assertEquals(200, alice.writeWithKey("PATCH", "/memories/" + id, editBody,
+                editKey).statusCode());
+        assertEquals(200, alice.writeWithKey("PATCH", "/memories/" + id, editBody,
+                editKey).statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(200, bob.write("PUT", "/notification-settings/MEMORY_CARD/" + id,
+                "{\"followUpMode\":\"IN_APP\",\"expectedVersion\":\"2\"}").statusCode());
+        assertEquals(200, alice.writeWithKey("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"27\",\"title\":\"new title\"}",
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(200, alice.write("POST", "/memories/" + id + "/archive",
+                "{\"expectedVersion\":\"28\"}").statusCode());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals(200, alice.write("DELETE", sharePath,
+                "{\"expectedVersion\":\"29\"}").statusCode());
+        assertEquals(404, bob.call("GET", commentsPath, null, null).statusCode());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_comment WHERE card_id = ?",
+                Integer.class, Long.parseLong(id)));
+        assertEquals(200, alice.writeWithKey("POST", sharePath,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"30\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"NONE\"}}", UUID.randomUUID().toString())
+                .statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", commentsPath, null, null)
+                .body()).path("total").asInt());
+    }
+
+    @Test
+    void mailFollowUpRequiresSessionBoundExplicitOverrideWithoutChangingRecipientSetting()
+            throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"shared\"}").body()).path("id").asText();
+        String sharePath = "/memories/" + id + "/share";
+        String commentsPath = "/memories/" + id + "/comments";
+        assertEquals(200, alice.writeWithKey("POST", sharePath,
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"IN_APP\"}}", UUID.randomUUID().toString())
+                .statusCode());
+        long cardId = Long.parseLong(id);
+        long aliceId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'alice'",
+                Long.class);
+        long bobId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'bob'",
+                Long.class);
+        jdbc.update("UPDATE notification_setting SET follow_up_mode = 'IN_APP_AND_MAIL', "
+                + "version = version + 1 WHERE resource_id = ? AND user_id = ?", cardId, aliceId);
+        String key = UUID.randomUUID().toString();
+        String body = "{\"expectedVersion\":\"1\",\"body\":\"needs review\"}";
+        HttpResponse<String> blocked = bob.writeWithKey("POST", commentsPath, body, key);
+        assertEquals(409, blocked.statusCode());
+        JsonNode error = JSON.readTree(blocked.body());
+        assertEquals("MAIL_NOT_AVAILABLE", error.path("code").asText());
+        String token = error.path("details").path("overrideToken").asText();
+        assertFalse(token.isBlank());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_comment WHERE card_id = ?",
+                Integer.class, cardId));
+        Browser bobOtherSession = new Browser();
+        bobOtherSession.login("bob", "B-user-test-password-21");
+        String chosen = "{\"expectedVersion\":\"1\",\"body\":\"needs review\","
+                + "\"notificationOverride\":{\"mode\":\"NONE\",\"token\":\"" + token + "\"}}";
+        HttpResponse<String> wrongSession = bobOtherSession.writeWithKey("POST", commentsPath,
+                chosen, key);
+        assertEquals(409, wrongSession.statusCode());
+        assertEquals("NOTIFICATION_CONTEXT_CHANGED", JSON.readTree(wrongSession.body())
+                .path("code").asText());
+        assertEquals(200, bob.writeWithKey("POST", commentsPath, chosen, key).statusCode());
+        assertEquals(200, bob.writeWithKey("POST", commentsPath, chosen, key).statusCode());
+        assertEquals("IN_APP_AND_MAIL", jdbc.queryForObject("SELECT follow_up_mode "
+                + "FROM notification_setting WHERE resource_id = ? AND user_id = ?",
+                String.class, cardId, aliceId));
+        assertEquals(0, JSON.readTree(alice.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+
+        HttpResponse<String> blockedAgain = bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"2\",\"body\":\"second\"}",
+                UUID.randomUUID().toString());
+        String staleToken = JSON.readTree(blockedAgain.body()).path("details")
+                .path("overrideToken").asText();
+        jdbc.update("UPDATE notification_setting SET follow_up_mode = 'IN_APP', "
+                + "version = version + 1 WHERE resource_id = ? AND user_id = ?", cardId, aliceId);
+        HttpResponse<String> stale = bob.writeWithKey("POST", commentsPath,
+                "{\"expectedVersion\":\"2\",\"body\":\"second\","
+                        + "\"notificationOverride\":{\"mode\":\"IN_APP\",\"token\":\""
+                        + staleToken + "\"}}", UUID.randomUUID().toString());
+        assertEquals(409, stale.statusCode());
+        assertEquals("NOTIFICATION_CONTEXT_CHANGED", JSON.readTree(stale.body())
+                .path("code").asText());
+        jdbc.update("UPDATE notification_setting SET follow_up_mode = 'IN_APP_AND_MAIL', "
+                + "version = version + 1 WHERE resource_id = ? AND user_id = ?", cardId, bobId);
+        String editKey = UUID.randomUUID().toString();
+        HttpResponse<String> editBlocked = alice.writeWithKey("PATCH", "/memories/" + id,
+                "{\"expectedVersion\":\"2\",\"body\":\"revised\"}", editKey);
+        assertEquals(409, editBlocked.statusCode());
+        String editToken = JSON.readTree(editBlocked.body()).path("details")
+                .path("overrideToken").asText();
+        String editChosen = "{\"expectedVersion\":\"2\",\"body\":\"revised\","
+                + "\"notificationOverride\":{\"mode\":\"IN_APP\",\"token\":\""
+                + editToken + "\"}}";
+        assertEquals(200, alice.writeWithKey("PATCH", "/memories/" + id, editChosen,
+                editKey).statusCode());
+        assertEquals(200, alice.writeWithKey("PATCH", "/memories/" + id, editChosen,
+                editKey).statusCode());
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals("IN_APP_AND_MAIL", jdbc.queryForObject("SELECT follow_up_mode "
+                + "FROM notification_setting WHERE resource_id = ? AND user_id = ?",
+                String.class, cardId, bobId));
+    }
+
+    @Test
+    void concurrentSameKeyCommentCreatesOneResultAndOneNotification() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        Browser bobOtherSession = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        bobOtherSession.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"once\"}").body()).path("id").asText();
+        assertEquals(200, alice.writeWithKey("POST", "/memories/" + id + "/share",
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"IN_APP\"}}", UUID.randomUUID().toString())
+                .statusCode());
+        String path = "/memories/" + id + "/comments";
+        String body = "{\"expectedVersion\":\"1\",\"body\":\"one comment\"}";
+        String key = UUID.randomUUID().toString();
+        JsonNode bobCsrf = bob.csrf();
+        JsonNode otherCsrf = bobOtherSession.csrf();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<HttpResponse<String>> one = pool.submit(() -> {
+                start.await();
+                return bob.call("POST", path, body, bobCsrf, key);
+            });
+            Future<HttpResponse<String>> two = pool.submit(() -> {
+                start.await();
+                return bobOtherSession.call("POST", path, body, otherCsrf, key);
+            });
+            start.countDown();
+            assertEquals(200, one.get().statusCode());
+            assertEquals(200, two.get().statusCode());
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM memory_comment WHERE card_id = ?",
+                Integer.class, Long.parseLong(id)));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM notification_operation",
+                Integer.class));
+        assertEquals(1, JSON.readTree(alice.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        assertEquals("2", JSON.readTree(alice.call("GET", "/memories/" + id, null, null)
+                .body()).path("version").asText());
+    }
+
+    @Test
+    void commentAndDisconnectRaceCannotRestoreOldShareOnReconnect() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"race share\"}").body()).path("id").asText();
+        assertEquals(200, alice.writeWithKey("POST", "/memories/" + id + "/share",
+                "{\"connectionId\":\"" + connectionId + "\",\"expectedVersion\":\"0\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                        + "\"followUpMode\":\"IN_APP\"}}", UUID.randomUUID().toString())
+                .statusCode());
+        JsonNode aliceCsrf = alice.csrf();
+        JsonNode bobCsrf = bob.csrf();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<HttpResponse<String>> comment = pool.submit(() -> {
+                start.await();
+                return bob.call("POST", "/memories/" + id + "/comments",
+                        "{\"expectedVersion\":\"1\",\"body\":\"race correction\"}",
+                        bobCsrf, UUID.randomUUID().toString());
+            });
+            Future<HttpResponse<String>> disconnect = pool.submit(() -> {
+                start.await();
+                return alice.call("POST", "/connection/end",
+                        "{\"expectedVersion\":\"0\"}", aliceCsrf);
+            });
+            start.countDown();
+            int commentStatus = comment.get().statusCode();
+            assertTrue(commentStatus == 200 || commentStatus == 404);
+            assertEquals(200, disconnect.get().statusCode());
+        } finally {
+            pool.shutdownNow();
+        }
+        assertTrue(JSON.readTree(alice.call("GET", "/memories/" + id, null, null)
+                .body()).path("sharedConnectionId").isNull());
+        assertEquals(404, bob.call("GET", "/memories/" + id, null, null).statusCode());
+        assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM memory_comment WHERE card_id = ?",
+                Integer.class, Long.parseLong(id)));
+        assertEquals(0, JSON.readTree(alice.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        connectResult(alice, bob);
+        assertEquals(404, bob.call("GET", "/memories/" + id, null, null).statusCode());
+        assertEquals(404, bob.call("GET", "/memories/" + id + "/comments",
+                null, null).statusCode());
+    }
+
+    @Test
     void paginationSearchAndTagCountsUseTheFullAuthorizedSet() throws Exception {
         Browser alice = new Browser();
         assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());

@@ -90,6 +90,14 @@ public interface MemoryMapper {
     int unshare(@Param("id") long id, @Param("ownerId") long ownerId,
                 @Param("connectionId") long connectionId, @Param("version") long version);
 
+    @Update("""
+            UPDATE memory_card SET version = version + 1, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = #{id} AND shared_connection_id = #{connectionId}
+              AND deleted_at IS NULL AND version = #{version}
+            """)
+    int bumpSharedVersion(@Param("id") long id, @Param("connectionId") long connectionId,
+                          @Param("version") long version);
+
     @Delete("DELETE FROM memory_comment WHERE card_id = #{cardId}")
     int deleteComments(@Param("cardId") long cardId);
 

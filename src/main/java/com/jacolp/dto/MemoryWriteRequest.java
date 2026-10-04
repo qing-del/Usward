@@ -13,7 +13,8 @@ import org.springframework.http.HttpStatus;
 
 public record MemoryWriteRequest(Set<String> present, String title, String body,
                                  String category, List<String> tags, String sourceType,
-                                 LocalDate sourceDate, String nextAction, Long expectedVersion) {
+                                 LocalDate sourceDate, String nextAction, Long expectedVersion,
+                                 NotificationOverrideRequest notificationOverride) {
     private static final Set<String> CONTENT_FIELDS = Set.of(
             "title", "body", "category", "tags", "sourceType", "sourceDate", "nextAction");
     private static final Set<String> CATEGORIES = Set.of("INTEREST", "RECENT_CONCERN",
@@ -28,8 +29,9 @@ public record MemoryWriteRequest(Set<String> present, String title, String body,
     public static MemoryWriteRequest patch(Map<String, Object> input) {
         Set<String> allowed = new HashSet<>(CONTENT_FIELDS);
         allowed.add("expectedVersion");
+        allowed.add("notificationOverride");
         checkFields(input, allowed);
-        if (input.size() < 2) {
+        if (input.keySet().stream().noneMatch(CONTENT_FIELDS::contains)) {
             throw invalid();
         }
         return parse(input, true);
@@ -54,7 +56,9 @@ public record MemoryWriteRequest(Set<String> present, String title, String body,
         String nextAction = optionalText(input, "nextAction", 5000, false);
         Long expectedVersion = patch ? version(input.get("expectedVersion")) : null;
         return new MemoryWriteRequest(present, title, body, category, tags,
-                sourceType, sourceDate, nextAction, expectedVersion);
+                sourceType, sourceDate, nextAction, expectedVersion,
+                input.containsKey("notificationOverride")
+                        ? NotificationOverrideRequest.parse(input.get("notificationOverride")) : null);
     }
 
     private static void checkFields(Map<String, Object> input, Set<String> allowed) {

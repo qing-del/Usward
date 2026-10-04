@@ -8,10 +8,12 @@ import com.jacolp.entity.AppUser;
 import com.jacolp.entity.MemoryCard;
 import com.jacolp.entity.MemoryTag;
 import com.jacolp.entity.NotificationOperation;
+import com.jacolp.entity.NotificationSetting;
 import com.jacolp.entity.PairConnection;
 import com.jacolp.mapper.ConnectionMapper;
 import com.jacolp.mapper.MemoryMapper;
 import com.jacolp.mapper.UserMapper;
+import jakarta.servlet.http.HttpSession;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -21,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -74,10 +77,55 @@ public class MemoryService {
         return detail(card, owner.getId());
     }
 
-    @Transactional
-    public MemoryDtos.Detail patch(String username, long id, MemoryWriteRequest input) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public MemoryDtos.Detail patch(String username, long id, MemoryWriteRequest input,
+                                   Map<String, Object> rawBody, String rawKey, HttpSession session) {
         AppUser owner = owner(username);
-        MemoryCard card = lockedVersion(id, owner.getId(), input.expectedVersion());
+        MemoryCard candidate = memories.findOwned(id, owner.getId());
+        if (candidate == null) {
+            throw notFound();
+        }
+        String key = null;
+        String hash = null;
+        if (candidate.getSharedConnectionId() != null || rawKey != null) {
+            key = business.key(rawKey);
+            hash = business.hash("PATCH", "/api/v1/memories/" + id, rawBody);
+            if (business.previous(owner.getId(), key, hash) != null) {
+                return replayOwner(owner.getId(), id);
+            }
+        }
+        if (candidate.getSharedConnectionId() == null
+                && input.notificationOverride() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "NOTIFICATION_CONTEXT_CHANGED",
+                    "通知选择上下文已变化，请重新查看");
+        }
+        MemoryCard card = lockOwned(id, owner.getId());
+        if (card.getSharedConnectionId() != null && key == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                    "已分享卡片编辑需要 Idempotency-Key");
+        }
+        if (key != null && business.previousLocked(owner.getId(), key, hash) != null) {
+            return replayOwner(owner.getId(), id);
+        }
+        if (card.getVersion() != input.expectedVersion()) {
+            if (input.notificationOverride() != null) {
+                throw new ApiException(HttpStatus.CONFLICT, "NOTIFICATION_CONTEXT_CHANGED",
+                        "通知选择上下文已变化，请重新查看");
+            }
+            throw versionConflict();
+        }
+        long partnerId = 0;
+        String mode = null;
+        if (card.getSharedConnectionId() != null) {
+            partnerId = partnerId(card.getSharedConnectionId(), owner.getId());
+            NotificationSetting recipient = settings.current(partnerId, id,
+                    card.getSharedConnectionId());
+            mode = business.followUpMode(session, owner.getId(), "MEMORY_EDIT", id,
+                    card.getSharedConnectionId(), card.getVersion(),
+                    recipient == null ? null : recipient.getVersion(),
+                    recipient == null ? "IN_APP" : recipient.getFollowUpMode(),
+                    input.notificationOverride());
+        }
         if (input.present().contains("title")) {
             card.setTitle(input.title());
         }
@@ -99,6 +147,12 @@ public class MemoryService {
         changed(memories.updateContent(card));
         if (input.present().contains("tags")) {
             replaceTags(id, input.tags());
+        }
+        if (mode != null) {
+            NotificationOperation operation = business.record(owner.getId(), key, hash,
+                    "MEMORY_EDIT", id, Map.of("cardId", Long.toString(id)));
+            business.notifyRecipient(operation, partnerId, "MEMORY_EDITED",
+                    "对方更新了一张共享记忆卡片，请登录 Usward 查看", mode);
         }
         return detail(memories.findOwned(id, owner.getId()), owner.getId());
     }
@@ -130,7 +184,7 @@ public class MemoryService {
         memories.deleteTags(id);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public MemoryDtos.Detail share(String username, long id, MemoryShareRequest input,
                                    Map<String, Object> rawBody, String rawKey) {
         AppUser author = owner(username);
@@ -151,7 +205,7 @@ public class MemoryService {
                 || !pair.getId().equals(second.getActiveConnectionId())) {
             throw notFound();
         }
-        previous = business.previous(author.getId(), key, hash);
+        previous = business.previousLocked(author.getId(), key, hash);
         if (previous != null) {
             return replayOwner(author.getId(), id);
         }
@@ -272,6 +326,14 @@ public class MemoryService {
     }
 
     private MemoryCard lockedVersion(long id, long ownerId, long expectedVersion) {
+        MemoryCard card = lockOwned(id, ownerId);
+        if (card.getVersion() != expectedVersion) {
+            throw versionConflict();
+        }
+        return card;
+    }
+
+    private MemoryCard lockOwned(long id, long ownerId) {
         MemoryCard candidate = memories.findOwned(id, ownerId);
         if (candidate == null) {
             throw notFound();
@@ -288,9 +350,6 @@ public class MemoryService {
         }
         if (card == null) {
             throw notFound();
-        }
-        if (card.getVersion() != expectedVersion) {
-            throw versionConflict();
         }
         return card;
     }

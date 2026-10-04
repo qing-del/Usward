@@ -100,7 +100,7 @@ public class MemoryCommentService {
             throw new ApiException(HttpStatus.CONFLICT, "VERSION_CONFLICT", "卡片版本已变化");
         }
         NotificationOperation operation = business.record(actor.getId(), key, hash,
-                "MEMORY_COMMENT", cardId,
+                "MEMORY_COMMENT", "MEMORY_CARD", cardId,
                 Map.of("cardId", Long.toString(cardId), "commentId", row.getId().toString()));
         business.notifyRecipient(operation, card.getOwnerId(), "MEMORY_COMMENTED",
                 "对方补充了一张共享记忆卡片，请登录 Usward 查看", mode);

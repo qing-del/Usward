@@ -48,7 +48,7 @@ public class NotificationSettingService {
         if (card == null) {
             throw notFound();
         }
-        NotificationSetting current = settings.lockCard(viewer.getId(), cardId);
+        NotificationSetting current = settings.lock(viewer.getId(), "MEMORY_CARD", cardId);
         if ((current == null && input.expectedVersion() != null)
                 || (current != null && (input.expectedVersion() == null
                 || current.getVersion().longValue() != input.expectedVersion()
@@ -67,16 +67,17 @@ public class NotificationSettingService {
         if (current == null) {
             NotificationSetting next = new NotificationSetting();
             next.setUserId(viewer.getId());
+            next.setResourceType("MEMORY_CARD");
             next.setResourceId(cardId);
             next.setConnectionId(card.getSharedConnectionId());
             next.setFollowUpMode(input.followUpMode());
-            settings.insertCard(next);
-        } else if (settings.updateCard(viewer.getId(), cardId, card.getSharedConnectionId(),
+            settings.insert(next);
+        } else if (settings.update(viewer.getId(), "MEMORY_CARD", cardId, card.getSharedConnectionId(),
                 current.getVersion(), input.followUpMode()) != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "NOTIFICATION_SETTING_CONFLICT",
                     "通知设置版本已变化");
         }
-        return dto(cardId, settings.card(viewer.getId(), cardId));
+        return dto(cardId, settings.find(viewer.getId(), "MEMORY_CARD", cardId));
     }
 
     @Transactional(readOnly = true)
@@ -128,29 +129,30 @@ public class NotificationSettingService {
     }
 
     public NotificationSetting current(long userId, long cardId, long connectionId) {
-        NotificationSetting row = settings.card(userId, cardId);
+        NotificationSetting row = settings.find(userId, "MEMORY_CARD", cardId);
         return row != null && row.getConnectionId() == connectionId ? row : null;
     }
 
     // Called with the active connection, both account rows and card locked.
     public void initializeCard(long cardId, long connectionId, long authorId, long recipientId,
                                String authorMode) {
-        settings.deleteCard(cardId);
+        settings.delete("MEMORY_CARD", cardId);
         insert(cardId, connectionId, authorId, authorMode);
         insert(cardId, connectionId, recipientId, "IN_APP");
     }
 
     public void deleteCard(long cardId) {
-        settings.deleteCard(cardId);
+        settings.delete("MEMORY_CARD", cardId);
     }
 
     private void insert(long cardId, long connectionId, long userId, String mode) {
         NotificationSetting row = new NotificationSetting();
         row.setResourceId(cardId);
+        row.setResourceType("MEMORY_CARD");
         row.setConnectionId(connectionId);
         row.setUserId(userId);
         row.setFollowUpMode(mode);
-        settings.insertCard(row);
+        settings.insert(row);
     }
 
     private NotificationSettingDtos.Detail dto(long cardId, NotificationSetting row) {

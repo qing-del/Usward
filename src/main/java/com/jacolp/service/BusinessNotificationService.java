@@ -79,14 +79,15 @@ public class BusinessNotificationService {
     }
 
     public NotificationOperation record(long actorId, String key, String requestHash,
-                                        String action, long cardId, Map<String, String> resultRefs) {
+                                        String action, String resourceType, long resourceId,
+                                        Map<String, String> resultRefs) {
         NotificationOperation row = new NotificationOperation();
         row.setActorId(actorId);
         row.setIdempotencyKey(key);
         row.setRequestHash(requestHash);
         row.setAction(action);
-        row.setResourceType("MEMORY_CARD");
-        row.setResourceId(cardId);
+        row.setResourceType(resourceType);
+        row.setResourceId(resourceId);
         row.setResultRefs(JSON.writeValueAsString(canonical(resultRefs)));
         operations.insert(row);
         return row;
@@ -103,7 +104,7 @@ public class BusinessNotificationService {
         Notification row = new Notification();
         row.setRecipientId(recipientId);
         row.setKind(kind);
-        row.setResourceType("MEMORY_CARD");
+        row.setResourceType(operation.getResourceType());
         row.setResourceId(operation.getResourceId());
         row.setMessage(message);
         row.setDedupeKey("business:" + operation.getId() + ":" + kind + ":" + recipientId);

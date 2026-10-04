@@ -150,7 +150,7 @@ public class MemoryService {
         }
         if (mode != null) {
             NotificationOperation operation = business.record(owner.getId(), key, hash,
-                    "MEMORY_EDIT", id, Map.of("cardId", Long.toString(id)));
+                    "MEMORY_EDIT", "MEMORY_CARD", id, Map.of("cardId", Long.toString(id)));
             business.notifyRecipient(operation, partnerId, "MEMORY_EDITED",
                     "对方更新了一张共享记忆卡片，请登录 Usward 查看", mode);
         }
@@ -236,7 +236,7 @@ public class MemoryService {
         settings.initializeCard(id, pair.getId(), author.getId(), partnerId,
                 input.followUpMode());
         NotificationOperation operation = business.record(author.getId(), key, hash,
-                "MEMORY_SHARE", id, Map.of("cardId", Long.toString(id)));
+                "MEMORY_SHARE", "MEMORY_CARD", id, Map.of("cardId", Long.toString(id)));
         business.notifyRecipient(operation, partnerId, "MEMORY_SHARED",
                 "对方分享了一张记忆卡片，请登录 Usward 查看", input.outgoingMode());
         return detail(memories.findOwned(id, author.getId()), author.getId());

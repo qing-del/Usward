@@ -14,33 +14,37 @@ public interface NotificationSettingMapper {
     String COLUMNS = "id, user_id, resource_type, resource_id, connection_id, follow_up_mode, version";
 
     @Select("SELECT " + COLUMNS + " FROM notification_setting WHERE user_id = #{userId} "
-            + "AND resource_type = 'MEMORY_CARD' AND resource_id = #{cardId}")
-    NotificationSetting card(@Param("userId") long userId, @Param("cardId") long cardId);
+            + "AND resource_type = #{resourceType} AND resource_id = #{resourceId}")
+    NotificationSetting find(@Param("userId") long userId, @Param("resourceType") String resourceType,
+                             @Param("resourceId") long resourceId);
 
     @Select("SELECT " + COLUMNS + " FROM notification_setting WHERE user_id = #{userId} "
-            + "AND resource_type = 'MEMORY_CARD' AND resource_id = #{cardId} FOR UPDATE")
-    NotificationSetting lockCard(@Param("userId") long userId, @Param("cardId") long cardId);
+            + "AND resource_type = #{resourceType} AND resource_id = #{resourceId} FOR UPDATE")
+    NotificationSetting lock(@Param("userId") long userId, @Param("resourceType") String resourceType,
+                             @Param("resourceId") long resourceId);
 
     @Insert("""
             INSERT INTO notification_setting
               (user_id, resource_type, resource_id, connection_id, follow_up_mode)
-            VALUES (#{userId}, 'MEMORY_CARD', #{resourceId}, #{connectionId}, #{followUpMode})
+            VALUES (#{userId}, #{resourceType}, #{resourceId}, #{connectionId}, #{followUpMode})
             """)
     @Options(useGeneratedKeys = true, keyProperty = "id")
-    int insertCard(NotificationSetting setting);
+    int insert(NotificationSetting setting);
 
     @Update("""
             UPDATE notification_setting SET follow_up_mode = #{mode}, version = version + 1,
               updated_at = UTC_TIMESTAMP(6)
-            WHERE user_id = #{userId} AND resource_type = 'MEMORY_CARD'
-              AND resource_id = #{cardId} AND connection_id = #{connectionId}
+            WHERE user_id = #{userId} AND resource_type = #{resourceType}
+              AND resource_id = #{resourceId} AND connection_id = #{connectionId}
               AND version = #{version}
             """)
-    int updateCard(@Param("userId") long userId, @Param("cardId") long cardId,
+    int update(@Param("userId") long userId, @Param("resourceType") String resourceType,
+                   @Param("resourceId") long resourceId,
                    @Param("connectionId") long connectionId, @Param("version") long version,
                    @Param("mode") String mode);
 
-    @Delete("DELETE FROM notification_setting WHERE resource_type = 'MEMORY_CARD' "
-            + "AND resource_id = #{cardId}")
-    int deleteCard(@Param("cardId") long cardId);
+    @Delete("DELETE FROM notification_setting WHERE resource_type = #{resourceType} "
+            + "AND resource_id = #{resourceId}")
+    int delete(@Param("resourceType") String resourceType,
+               @Param("resourceId") long resourceId);
 }

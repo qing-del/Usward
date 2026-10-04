@@ -1863,6 +1863,15 @@ class BackendIntegrationTests {
         assertEquals(200, alice.writeWithKey("POST", path, body, key).statusCode());
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification_operation",
                 Integer.class));
+        assertEquals("MEMORY_CARD", jdbc.queryForObject(
+                "SELECT resource_type FROM notification_operation WHERE idempotency_key = ?",
+                String.class, key));
+        assertEquals("MEMORY_CARD", jdbc.queryForObject(
+                "SELECT resource_type FROM notification WHERE kind = 'MEMORY_SHARED'",
+                String.class));
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM notification_setting "
+                + "WHERE resource_type = 'MEMORY_CARD' AND resource_id = ?",
+                Integer.class, Long.parseLong(id)));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE kind = 'MEMORY_SHARED'",
                 Integer.class));
         assertEquals(409, alice.writeWithKey("POST", path,

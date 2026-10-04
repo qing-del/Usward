@@ -21,11 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class NotificationService {
     private final NotificationMapper notifications;
     private final UserMapper users;
-    private final ReminderService access;
+    private final NotificationAccessService access;
     private final NotificationSnapshotStore snapshots;
 
     public NotificationService(NotificationMapper notifications, UserMapper users,
-                               ReminderService access, NotificationSnapshotStore snapshots) {
+                               NotificationAccessService access, NotificationSnapshotStore snapshots) {
         this.notifications = notifications;
         this.users = users;
         this.access = access;

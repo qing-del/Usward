@@ -2,7 +2,9 @@
 
 当前正式后端提供登录、个人资料维护、共享记忆卡片与补充更正、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读、个人今日聚合、连接邀请与解除，以及脱敏忙闲查询。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些已实现接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
-互动通知的内部回执、通知写入与后续设置存储已按资源类型处理；通知可见性与私人提醒可设置性分别校验。当前对外仍只开放共享记忆卡片的互动通知设置，表达接口在后续批次接入。
+互动通知的内部回执、通知写入与后续设置存储已按资源类型处理；通知可见性与私人提醒可设置性分别校验。当前对外仍只开放共享记忆卡片的互动通知设置，表达后续通知设置在下一批接入。
+
+轻量表达已开放 `POST/GET /expressions`、`GET /expressions/{id}` 和 `POST /expressions/{id}/withdraw`。发送提交当前连接的十进制字符串 `connectionId`、类型、可选正文与回应偏好；`FREE_TEXT` 必须有非空白正文。发送必须携带 UUID `Idempotency-Key`，可选 `notificationPlan={outgoingMode,followUpMode}`，省略时双方默认 `IN_APP`。邮件方式目前返回 `MAIL_NOT_AVAILABLE`，不保存表达；`NONE` 仍保存幂等回执。列表支持方向、状态、分页，详情可用 `replyPage/replySize` 查询回应页。撤回提交字符串 `expectedVersion`，撤回后两端仅能读取不含正文和回应的占位，旧通知失效。解除连接后旧表达不可读取，重新连接也不会恢复访问。
 
 登录后调用 `POST /connection-invites` 可生成一次性口令，创建响应仅此一次包含 `token`。`GET /connection` 只返回当前连接和本人尚未过期的待发邀请元数据。另一账号通过 `POST /connection-invites/preview` 提交 `{ "token": "…" }` 查看邀请者公开摘要，再通过 `POST /connection-invites/accept` 提交 `{ "token": "…", "expectedVersion": "0" }` 主动接受。邀请者可用 `POST /connection-invites/{id}/revoke` 和 `{ "expectedVersion": "0" }` 撤销；口令不进入 URL，绑定不会自动分享个人内容。所有写操作继续使用登录 Session 的 CSRF 令牌。
 

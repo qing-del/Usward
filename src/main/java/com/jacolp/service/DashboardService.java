@@ -4,6 +4,7 @@ import com.jacolp.common.ApiException;
 import com.jacolp.dto.CommitmentDtos;
 import com.jacolp.dto.DashboardDtos;
 import com.jacolp.dto.EventDtos;
+import com.jacolp.dto.ExpressionDtos;
 import com.jacolp.dto.ReminderDtos;
 import com.jacolp.entity.AppUser;
 import com.jacolp.mapper.CommitmentMapper;
@@ -26,10 +27,12 @@ public class DashboardService {
     private final CommitmentService commitments;
     private final ReminderService reminders;
     private final NotificationService notifications;
+    private final ExpressionService expressions;
 
     public DashboardService(UserMapper users, CalendarService calendar, MemoryService memories,
                             CommitmentMapper commitmentRows, CommitmentService commitments,
-                            ReminderService reminders, NotificationService notifications) {
+                            ReminderService reminders, NotificationService notifications,
+                            ExpressionService expressions) {
         this.users = users;
         this.calendar = calendar;
         this.memories = memories;
@@ -37,6 +40,7 @@ public class DashboardService {
         this.commitments = commitments;
         this.reminders = reminders;
         this.notifications = notifications;
+        this.expressions = expressions;
     }
 
     @Transactional(readOnly = true)
@@ -58,8 +62,9 @@ public class DashboardService {
                         .thenComparing(item -> Long.parseLong(item.id())))
                 .toList();
         List<ReminderDtos.Detail> pending = reminders.pendingForDashboard(owner.getId());
+        List<ExpressionDtos.Summary> received = expressions.pendingForDashboard(owner.getId(), asOf);
         DashboardDtos.Group<Object> empty = new DashboardDtos.Group<>(List.of(), 0, false);
-        DashboardDtos.Groups groups = new DashboardDtos.Groups(group(dayEvents, 10), empty,
+        DashboardDtos.Groups groups = new DashboardDtos.Groups(group(dayEvents, 10), group(received, 5),
                 empty, group(pending, 5), group(due, 5));
         return new DashboardDtos.Dashboard(asOf, owner.getTimezone(), today, groups,
                 memories.latestOwnSummary(owner), notifications.unreadCount(owner.getId()));

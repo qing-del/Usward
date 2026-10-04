@@ -28,16 +28,19 @@ public class CommitmentService {
     private final UserMapper users;
     private final ReminderService reminders;
     private final ResourceLifecycleService lifecycle;
+    private final ExpressionAccessService expressions;
 
     public CommitmentService(CommitmentMapper commitments, MemoryAccessService memories,
                              CalendarMapper events, UserMapper users, ReminderService reminders,
-                             ResourceLifecycleService lifecycle) {
+                             ResourceLifecycleService lifecycle,
+                             ExpressionAccessService expressions) {
         this.commitments = commitments;
         this.memories = memories;
         this.events = events;
         this.users = users;
         this.reminders = reminders;
         this.lifecycle = lifecycle;
+        this.expressions = expressions;
     }
 
     @Transactional
@@ -220,6 +223,7 @@ public class CommitmentService {
         return switch (type) {
             case "MEMORY_CARD" -> memories.readable(ownerId, id) != null;
             case "CALENDAR_EVENT" -> events.findOwned(id, ownerId) != null;
+            case "EXPRESSION" -> expressions.activeContent(ownerId, id);
             default -> false;
         };
     }

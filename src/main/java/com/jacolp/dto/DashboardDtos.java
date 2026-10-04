@@ -11,7 +11,7 @@ public final class DashboardDtos {
     public record Group<T>(List<T> items, long total, boolean hasMore) {
     }
 
-    public record Groups(Group<EventDtos.Detail> events, Group<Object> expressions,
+    public record Groups(Group<EventDtos.Detail> events, Group<ExpressionDtos.Summary> expressions,
                          Group<Object> invitations, Group<ReminderDtos.Detail> reminders,
                          Group<CommitmentDtos.Summary> commitments) {
     }

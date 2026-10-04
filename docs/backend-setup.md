@@ -1,6 +1,6 @@
 # 后端运行说明
 
-当前正式后端提供登录、个人资料维护、共享记忆卡片与补充更正、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读、个人今日聚合、连接邀请与解除，以及脱敏忙闲查询。正式 Vue 前端位于 [`frontend/`](../frontend/README.md) 并已接入这些已实现接口；`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
+当前正式后端提供登录、个人资料维护、共享记忆卡片与补充更正、个人事件读写、私人日历范围查询、私密承诺的完整个人读写、私人提醒设置与到时站内通知、通知读取与已读、个人今日聚合、连接邀请与解除、脱敏忙闲查询，以及轻量表达与回应。正式 Vue 前端位于 [`frontend/`](../frontend/README.md)，已接入此前的个人、连接、忙闲和共享记忆接口；本轮表达接口尚未接入前端。`static/UI` 仍是独立的浏览器演示，不会使用后端接口。
 
 互动通知的内部回执、通知写入与后续设置存储已按资源类型处理；通知可见性与私人提醒可设置性分别校验。对外开放共享记忆卡片和当前有效表达的后续通知设置，表达不支持私人到时提醒。
 
@@ -58,7 +58,9 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 `GET /commitments` 支持 `page`、`size`、`scope=MINE/PARTNER/ALL`、`status=OPEN/DONE/CANCELLED/ALL`、`sort=DEADLINE_ASC/UPDATED_DESC`。当前只有本人承诺，`PARTNER` 返回空结果。默认只列出 OPEN，按绝对截止时间升序排列，无截止时间的项放最后；日期截止依据保存的 IANA 时区换算。响应包含当前筛选的 `total` 和忽略 status 筛选的全量 `statusCounts`，列表摘要不包含说明或完成结果。
 
-`GET /dashboard` 按账号时区确定今天，并返回一次捕获的 `asOf`、`timezone`、`today`、`groups`、`featuredMemory` 和 `unreadCount`。当前 `events` 只含今日相交的本人个人事件，最多 10 条；`commitments` 只含到期或逾期的本人 OPEN 承诺，逾期优先，最多 5 条；`reminders` 含仍可访问目标上的 PENDING 私人提醒，按设置时间升序取前 5 条，包括已到时但尚未扫描的提醒。各组的 `total` 是全量计数，`hasMore` 指示是否超过上限。`featuredMemory` 是最近更新的本人未归档卡片摘要。表达、邀约组目前为空；`unreadCount` 是当前可访问站内通知的全量未读数。读取不会创建通知。
+`GET /dashboard` 按账号时区确定今天，并返回一次捕获的 `asOf`、`timezone`、`today`、`groups`、`featuredMemory` 和 `unreadCount`。当前 `events` 只含今日相交的本人个人事件，最多 10 条；`commitments` 只含到期或逾期的本人 OPEN 承诺，逾期优先，最多 5 条；`reminders` 含仍可访问目标上的 PENDING 私人提醒，按设置时间升序取前 5 条，包括已到时但尚未扫描的提醒。各组的 `total` 是全量计数，`hasMore` 指示是否超过上限。`featuredMemory` 是最近更新的本人未归档卡片摘要。邀约组目前为空；`unreadCount` 是当前可访问站内通知的全量未读数。读取不会创建通知。
+
+`expressions` 组现在返回当前连接中本人收到的 OPEN 表达，创建时间与 ID 倒序取前 5 条，`total/hasMore` 基于全部匹配结果；未连接时为空。私密承诺的 `sourceType=EXPRESSION` 现在接受当前可读取且未撤回的表达，`sourceId` 为十进制字符串。表达撤回或连接解除后，承诺保留原引用，但 `sourceAvailable=false`；重新连接不会恢复旧来源权限。
 
 `PUT /reminders` 为当前可读取的本人卡片、个人事件或 OPEN 承诺设置私人提醒，提交 `resourceType`、字符串 `resourceId`、UTC `Z` 格式的 `scheduledAt`、可选的 `deliveryMode=IN_APP`，以及首次为 `null`、之后为字符串的 `expectedRevision`。设置成功返回含字符串 `id/revision/version` 的提醒 DTO；即使时间与方式不变，重新设置仍递增修订号。`DELETE /reminders/{id}` 携带字符串 `expectedRevision`，返回状态为 CANCELLED 的最新 DTO；`GET /reminders` 支持 `resourceType`、`status=ALL/PENDING/FIRED/CANCELLED`、`page`、`size` 和 `sort=SCHEDULED_ASC`。卡片、事件和承诺详情中的 `myReminder` 可用于刷新后取得当前修订号。尚未接入 SMTP；选择 `IN_APP_AND_MAIL` 时，无本人收件邮箱返回 `RECIPIENT_EMAIL_REQUIRED`，已有邮箱则返回 `MAIL_NOT_AVAILABLE`。后台每分钟分批扫描已到时的 PENDING 提醒，重启后补扫；站内通知与 FIRED 状态同事务保存，重复扫描不会生成第二条。同一库中若已有邮件模式提醒，到时仍创建站内通知，并记录 `FAILED/MAIL_DISABLED` 邮件任务，不发送邮件。
 

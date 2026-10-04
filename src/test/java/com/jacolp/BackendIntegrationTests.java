@@ -2509,6 +2509,142 @@ class BackendIntegrationTests {
                 .path("unreadCount").asInt());
     }
 
+    @Test
+    void dashboardExpressionsAndPrivateCommitmentSourceFollowCurrentConnection() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (int index = 0; index < 7; index++) {
+            JsonNode sent = JSON.readTree(alice.writeWithKey("POST", "/expressions",
+                    "{\"connectionId\":\"" + connectionId + "\",\"type\":\"SPEND_TIME\","
+                            + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                            + "\"followUpMode\":\"IN_APP\"}}",
+                    UUID.randomUUID().toString()).body());
+            ids.add(sent.path("id").asText());
+        }
+        for (int index = 0; index < 2; index++) {
+            assertEquals(201, bob.writeWithKey("POST", "/expressions",
+                    "{\"connectionId\":\"" + connectionId + "\",\"type\":\"NEED_SPACE\","
+                            + "\"notificationPlan\":{\"outgoingMode\":\"NONE\","
+                            + "\"followUpMode\":\"NONE\"}}",
+                    UUID.randomUUID().toString()).statusCode());
+        }
+        JsonNode bobToday = JSON.readTree(bob.call("GET", "/dashboard", null, null).body());
+        JsonNode received = bobToday.path("groups").path("expressions");
+        assertEquals(7, received.path("total").asInt());
+        assertEquals(5, received.path("items").size());
+        assertTrue(received.path("hasMore").asBoolean());
+        assertEquals(ids.get(6), received.path("items").get(0).path("id").asText());
+        assertEquals(2, JSON.readTree(alice.call("GET", "/dashboard", null, null).body())
+                .path("groups").path("expressions").path("total").asInt());
+        String create = "{\"title\":\"My next step\",\"sourceType\":\"EXPRESSION\","
+                + "\"sourceId\":\"" + ids.get(0) + "\"}";
+        JsonNode commitment = JSON.readTree(bob.write("POST", "/commitments", create).body());
+        String commitmentId = commitment.path("id").asText();
+        assertTrue(commitment.path("sourceAvailable").asBoolean());
+        assertEquals(404, bob.write("POST", "/commitments", create.replace(ids.get(0),
+                "999999999")).statusCode());
+        assertEquals(200, alice.write("POST", "/expressions/" + ids.get(0) + "/withdraw",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertFalse(JSON.readTree(bob.call("GET", "/commitments/" + commitmentId,
+                null, null).body()).path("sourceAvailable").asBoolean());
+        assertEquals(6, JSON.readTree(bob.call("GET", "/dashboard", null, null).body())
+                .path("groups").path("expressions").path("total").asInt());
+        assertEquals(404, bob.write("PATCH", "/commitments/" + commitmentId,
+                "{\"expectedVersion\":\"0\",\"sourceType\":\"EXPRESSION\","
+                        + "\"sourceId\":\"" + ids.get(0) + "\"}").statusCode());
+        assertEquals(200, alice.write("POST", "/connection/end",
+                "{\"expectedVersion\":\"0\"}").statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/dashboard", null, null).body())
+                .path("groups").path("expressions").path("total").asInt());
+        assertFalse(JSON.readTree(bob.call("GET", "/commitments/" + commitmentId,
+                null, null).body()).path("sourceAvailable").asBoolean());
+        connectResult(alice, bob);
+        assertFalse(JSON.readTree(bob.call("GET", "/commitments/" + commitmentId,
+                null, null).body()).path("sourceAvailable").asBoolean());
+    }
+
+    @Test
+    void concurrentSameKeyExpressionSendCreatesOneRecord() throws Exception {
+        Browser alice = new Browser();
+        Browser aliceOtherSession = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        aliceOtherSession.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String body = "{\"connectionId\":\"" + connectionId
+                + "\",\"type\":\"SHARE_SOMETHING\"}";
+        String key = UUID.randomUUID().toString();
+        JsonNode firstCsrf = alice.csrf();
+        JsonNode secondCsrf = aliceOtherSession.csrf();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<HttpResponse<String>> one = pool.submit(() -> {
+                start.await();
+                return alice.call("POST", "/expressions", body, firstCsrf, key);
+            });
+            Future<HttpResponse<String>> two = pool.submit(() -> {
+                start.await();
+                return aliceOtherSession.call("POST", "/expressions", body, secondCsrf, key);
+            });
+            start.countDown();
+            assertEquals(201, one.get().statusCode());
+            assertEquals(201, two.get().statusCode());
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM expression", Integer.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM notification "
+                + "WHERE kind = 'EXPRESSION_SENT'", Integer.class));
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+    }
+
+    @Test
+    void withdrawAndDisconnectRaceNeverExposesOldExpression() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.writeWithKey("POST", "/expressions",
+                "{\"connectionId\":\"" + connectionId + "\",\"type\":\"FREE_TEXT\","
+                        + "\"body\":\"sensitive\"}", UUID.randomUUID().toString())
+                .body()).path("id").asText();
+        JsonNode aliceCsrf = alice.csrf();
+        JsonNode bobCsrf = bob.csrf();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<HttpResponse<String>> withdraw = pool.submit(() -> {
+                start.await();
+                return alice.call("POST", "/expressions/" + id + "/withdraw",
+                        "{\"expectedVersion\":\"0\"}", aliceCsrf);
+            });
+            Future<HttpResponse<String>> end = pool.submit(() -> {
+                start.await();
+                return bob.call("POST", "/connection/end",
+                        "{\"expectedVersion\":\"0\"}", bobCsrf);
+            });
+            start.countDown();
+            int withdrawStatus = withdraw.get().statusCode();
+            assertTrue(withdrawStatus == 200 || withdrawStatus == 404);
+            assertEquals(200, end.get().statusCode());
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(404, alice.call("GET", "/expressions/" + id, null, null).statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+        connectResult(alice, bob);
+        assertEquals(404, bob.call("GET", "/expressions/" + id, null, null).statusCode());
+    }
+
     private long countTag(JsonNode list, String tag) {
         for (JsonNode row : list.path("availableTags")) {
             if (tag.equals(row.path("tag").asText())) {

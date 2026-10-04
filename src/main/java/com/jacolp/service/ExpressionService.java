@@ -234,14 +234,15 @@ public class ExpressionService {
     }
 
     @Transactional(readOnly = true)
-    public List<ExpressionDtos.Summary> pendingForDashboard(long viewerId) {
+    public List<ExpressionDtos.Summary> pendingForDashboard(long viewerId, Instant asOf) {
         AppUser viewer = users.findById(viewerId);
         PairConnection pair = viewer == null ? null : currentPair(viewer);
         if (pair == null) {
             return List.of();
         }
         return expressions.listConnection(pair.getId()).stream()
-                .filter(row -> row.getRecipientId().equals(viewerId) && "OPEN".equals(row.getStatus()))
+                .filter(row -> row.getRecipientId().equals(viewerId) && "OPEN".equals(row.getStatus())
+                        && !row.getCreatedAt().isAfter(LocalDateTime.ofInstant(asOf, ZoneOffset.UTC)))
                 .map(this::activeSummary).toList();
     }
 

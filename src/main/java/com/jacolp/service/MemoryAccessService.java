@@ -57,8 +57,17 @@ public class MemoryAccessService {
         if (connectionId == null) {
             return null;
         }
+        return lockShared(viewerId, cardId);
+    }
+
+    public MemoryCard lockShared(long viewerId, long cardId) {
+        MemoryCard candidate = memories.findById(cardId);
+        if (candidate == null || candidate.getSharedConnectionId() == null) {
+            return null;
+        }
+        Long connectionId = candidate.getSharedConnectionId();
         PairConnection pair = connections.lockActiveConnection(connectionId);
-        if (pair == null || !members(pair, viewerId, candidate.getOwnerId())) {
+        if (pair == null || !member(pair, viewerId) || !member(pair, candidate.getOwnerId())) {
             return null;
         }
         AppUser first = users.lockById(pair.getUserAId());
@@ -88,7 +97,7 @@ public class MemoryAccessService {
 
     private boolean matches(PairConnection pair, AppUser viewer, AppUser author, long connectionId) {
         return pair != null && viewer != null && author != null
-                && members(pair, viewer.getId(), author.getId())
+                && member(pair, viewer.getId()) && member(pair, author.getId())
                 && connectionId == viewer.getActiveConnectionId()
                 && connectionId == author.getActiveConnectionId();
     }
@@ -96,5 +105,9 @@ public class MemoryAccessService {
     private boolean members(PairConnection pair, long one, long other) {
         return (pair.getUserAId() == one && pair.getUserBId() == other)
                 || (pair.getUserBId() == one && pair.getUserAId() == other);
+    }
+
+    private boolean member(PairConnection pair, long userId) {
+        return pair.getUserAId() == userId || pair.getUserBId() == userId;
     }
 }

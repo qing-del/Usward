@@ -17,7 +17,8 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 public class ApiExceptionHandler {
     @ExceptionHandler(ApiException.class)
     public ResponseEntity<ApiError> handleApi(ApiException exception) {
-        return error(exception.status(), exception.code(), exception.getMessage(), null);
+        return error(exception.status(), exception.code(), exception.getMessage(), null,
+                exception.details());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -25,18 +26,18 @@ public class ApiExceptionHandler {
         Map<String, String> fields = new LinkedHashMap<>();
         exception.getBindingResult().getFieldErrors().forEach(field ->
                 fields.putIfAbsent(field.getField(), field.getDefaultMessage()));
-        return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "请求字段无效", fields);
+        return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "请求字段无效", fields, null);
     }
 
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
             ConstraintViolationException.class, IllegalArgumentException.class})
     public ResponseEntity<ApiError> handleBadRequest(Exception exception) {
-        return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "请求字段无效", null);
+        return error(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "请求字段无效", null, null);
     }
 
     private ResponseEntity<ApiError> error(HttpStatus status, String code, String message,
-                                           Map<String, String> fields) {
+                                           Map<String, String> fields, Map<String, Object> details) {
         return ResponseEntity.status(status)
-                .body(new ApiError(code, message, fields, UUID.randomUUID().toString()));
+                .body(new ApiError(code, message, fields, details, UUID.randomUUID().toString()));
     }
 }

@@ -1761,6 +1761,64 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void sharedCardNotificationSettingsArePersonalVersionedAndMailAware() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode pair = connectResult(alice, bob);
+        JsonNode card = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"current shared card\"}").body());
+        String id = card.path("id").asText();
+        String path = "/notification-settings/MEMORY_CARD/" + id;
+        assertEquals(400, alice.call("GET", path, null, null).statusCode());
+        jdbc.update("UPDATE memory_card SET shared_connection_id = ? WHERE id = ?",
+                Long.parseLong(pair.path("id").asText()), Long.parseLong(id));
+        JsonNode initial = JSON.readTree(alice.call("GET", path, null, null).body());
+        assertEquals("IN_APP", initial.path("followUpMode").asText());
+        assertTrue(initial.path("version").isNull());
+        assertEquals(403, alice.call("PUT", path,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":null}", null).statusCode());
+        HttpResponse<String> mutedResponse = alice.write("PUT", path,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":null}");
+        assertEquals(200, mutedResponse.statusCode(), mutedResponse.body());
+        JsonNode muted = JSON.readTree(mutedResponse.body());
+        assertEquals("1", muted.path("version").asText());
+        assertEquals("NONE", muted.path("followUpMode").asText());
+        assertEquals(409, alice.write("PUT", path,
+                "{\"followUpMode\":\"IN_APP\",\"expectedVersion\":null}").statusCode());
+        JsonNode restored = JSON.readTree(alice.write("PUT", path,
+                "{\"followUpMode\":\"IN_APP\",\"expectedVersion\":\"1\"}").body());
+        assertEquals("2", restored.path("version").asText());
+        assertTrue(JSON.readTree(bob.call("GET", path, null, null).body()).path("version").isNull());
+        assertEquals(400, alice.write("PUT", path,
+                "{\"followUpMode\":\"IN_APP_AND_MAIL\",\"expectedVersion\":\"2\"}"
+        ).statusCode());
+        JsonNode profile = JSON.readTree(alice.call("GET", "/me", null, null).body());
+        alice.write("PATCH", "/me", "{\"expectedVersion\":\""
+                + profile.path("version").asText() + "\",\"notificationEmail\":\"alice@example.test\"}");
+        assertEquals(409, alice.write("PUT", path,
+                "{\"followUpMode\":\"IN_APP_AND_MAIL\",\"expectedVersion\":\"2\"}"
+        ).statusCode());
+        assertEquals(400, alice.write("PUT", path,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":\"2\",\"recipientId\":\"1\"}"
+        ).statusCode());
+        assertEquals("2", JSON.readTree(alice.call("GET", path, null, null)
+                .body()).path("version").asText());
+        JsonNode newAction = JSON.readTree(alice.call("GET", "/notification-capabilities?connectionId="
+                + pair.path("id").asText(), null, null).body());
+        assertFalse(newAction.path("otherMailAvailable").asBoolean());
+        assertTrue(newAction.path("effectiveOutgoingMode").isNull());
+        JsonNode edit = JSON.readTree(alice.call("GET", "/notification-capabilities?resourceType="
+                + "MEMORY_CARD&resourceId=" + id + "&action=MEMORY_EDIT", null, null).body());
+        assertEquals("IN_APP", edit.path("effectiveOutgoingMode").asText());
+        assertEquals(404, bob.call("GET", "/notification-capabilities?resourceType=MEMORY_CARD"
+                + "&resourceId=" + id + "&action=MEMORY_EDIT", null, null).statusCode());
+        assertEquals(400, alice.call("GET", "/notification-settings/COMMITMENT/" + id,
+                null, null).statusCode());
+    }
+
+    @Test
     void paginationSearchAndTagCountsUseTheFullAuthorizedSet() throws Exception {
         Browser alice = new Browser();
         assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());

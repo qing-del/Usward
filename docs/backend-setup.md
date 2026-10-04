@@ -36,6 +36,8 @@ API 前缀为 `/api/v1`。匿名访问先调用 `GET /auth/csrf`，把响应中�
 
 `GET /memories` 支持 `page`、`size`、`scope`、`archived`、`keyword`、`category`、`tag`、`sort`。`ALL` 包含本人未归档卡片与当前连接中对方已分享的卡片，`PARTNER` 只含后者；查询自己的归档卡片需显式使用 `scope=MINE&archived=true`，作者归档不影响对方读取。列表摘要不含正文，`total` 与 `availableTags` 基于完整的当前账号可见结果计算。跨账号读取、私人提醒及来源权限已接入；分享写入和评论接口将在后续提交开放。
 
+当前连接中已分享卡片可用 `GET/PUT /notification-settings/MEMORY_CARD/{id}` 读取与修改本人的后续通知方式，PUT 接收 `followUpMode` 和字符串或 null 的 `expectedVersion`；尚无设置行时读取默认 `IN_APP、version=null`。`GET /notification-capabilities` 支持 `connectionId`，或 `resourceType=MEMORY_CARD&resourceId={id}&action=MEMORY_EDIT/MEMORY_COMMENT`。SMTP 尚未启用，能力布尔值为 false；设置邮件方式时按本人邮箱情况返回 `RECIPIENT_EMAIL_REQUIRED` 或 `MAIL_NOT_AVAILABLE`。业务通知的幂等回执与改选凭据已备好，分享与补充操作将在下一提交使用。
+
 `PATCH /me` 使用当前 `GET /me` 中的字符串 `version` 作为 `expectedVersion`，可修改昵称、`avatarStyle`、IANA `timezone`、`notificationEmail` 和 `shareAvailability`。邮箱使用单个地址，传 `null` 可清空；尚未提供 SMTP，因此 `mailReminderAvailable` 始终为 false。没有有效连接时不能开启忙闲共享。`POST /me/password` 接收 `{"oldPassword":"…","newPassword":"…"}`，成功返回 204 并使该账号全部 Session 失效；随后重新获取 CSRF 并登录。
 
 个人事件使用 `POST /events` 创建、`GET /events/{id}` 读取、`PATCH /events/{id}` 编辑、`DELETE /events/{id}` 删除。写入仅接受自己的事件字段，带时间形式为 `{"title":"阅读","allDay":false,"startsAt":"2026-09-29T09:00:00Z","endsAt":"2026-09-29T10:00:00Z","eventTimezone":"Asia/Shanghai","availability":"BUSY"}`；全天形式改用 `startDate`、`endDateExclusive`。PATCH 修改时间或时区时须提交完整的一组时间字段；其它字段可单独修改。PATCH/DELETE 都要传字符串 `expectedVersion`，旧版本返回 409。`offlineConfirmed=true` 且不提供时间时由服务端记录当前时刻；再次提交 true 保留已有时间，false 清空。

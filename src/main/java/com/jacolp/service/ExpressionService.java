@@ -4,6 +4,7 @@ import com.jacolp.common.ApiException;
 import com.jacolp.dto.ExpressionDtos;
 import com.jacolp.dto.ExpressionRequests;
 import com.jacolp.dto.NotificationSettingDtos;
+import jakarta.servlet.http.HttpSession;
 import com.jacolp.entity.AppUser;
 import com.jacolp.entity.Expression;
 import com.jacolp.entity.ExpressionReply;
@@ -165,6 +166,73 @@ public class ExpressionService {
         return placeholder(expressions.find(id));
     }
 
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ExpressionDtos.Replied reply(String username, long id, ExpressionRequests.Reply input,
+                                         Map<String, Object> rawBody, String rawKey,
+                                         HttpSession session) {
+        AppUser actor = actor(username);
+        String key = business.key(rawKey);
+        String hash = business.hash("POST", "/api/v1/expressions/" + id + "/replies", rawBody);
+        NotificationOperation previous = business.previous(actor.getId(), key, hash);
+        if (previous != null) {
+            return replayReply(actor.getId(), id, previous);
+        }
+        Expression candidate = access.readable(actor.getId(), id);
+        if (candidate == null) {
+            throw notFound();
+        }
+        PairConnection pair = lockedPair(candidate.getConnectionId(), actor.getId());
+        Expression row = expressions.lock(id);
+        if (row == null || !row.getConnectionId().equals(pair.getId())
+                || "WITHDRAWN".equals(row.getStatus())) {
+            throw notFound();
+        }
+        previous = business.previousLocked(actor.getId(), key, hash);
+        if (previous != null) {
+            return replayReply(actor.getId(), id, previous);
+        }
+        if (row.getVersion() != input.expectedVersion()) {
+            if (input.notificationOverride() != null) {
+                throw new ApiException(HttpStatus.CONFLICT, "NOTIFICATION_CONTEXT_CHANGED",
+                        "通知选择上下文已变化，请重新查看");
+            }
+            throw versionConflict();
+        }
+        boolean recipient = row.getRecipientId().equals(actor.getId());
+        if (!recipient && input.preset() != null) {
+            throw invalid();
+        }
+        long otherId = recipient ? row.getSenderId() : row.getRecipientId();
+        String action = recipient ? "EXPRESSION_REPLY" : "EXPRESSION_SUPPLEMENT";
+        NotificationSetting setting = settings.find(otherId, "EXPRESSION", id);
+        if (setting != null && !row.getConnectionId().equals(setting.getConnectionId())) {
+            setting = null;
+        }
+        String mode = business.followUpMode(session, actor.getId(), action, id,
+                row.getConnectionId(), row.getVersion(),
+                setting == null ? null : setting.getVersion(),
+                setting == null ? "IN_APP" : setting.getFollowUpMode(),
+                input.notificationOverride());
+        ExpressionReply reply = new ExpressionReply();
+        reply.setExpressionId(id);
+        reply.setAuthorId(actor.getId());
+        reply.setPreset(input.preset());
+        reply.setBody(input.body());
+        expressions.insertReply(reply);
+        String status = recipient ? "RESPONDED" : row.getStatus();
+        if (expressions.bump(id, pair.getId(), row.getVersion(), status) != 1) {
+            throw versionConflict();
+        }
+        NotificationOperation operation = business.record(actor.getId(), key, hash,
+                action, "EXPRESSION", id,
+                Map.of("expressionId", Long.toString(id), "replyId", reply.getId().toString()));
+        business.notifyRecipient(operation, otherId,
+                recipient ? "EXPRESSION_REPLIED" : "EXPRESSION_SUPPLEMENTED",
+                "对方回应或补充了一条表达，请登录 Usward 查看", mode);
+        return new ExpressionDtos.Replied(replyDto(expressions.reply(reply.getId(), id)),
+                Long.toString(row.getVersion() + 1), status);
+    }
+
     @Transactional(readOnly = true)
     public List<ExpressionDtos.Summary> pendingForDashboard(long viewerId) {
         AppUser viewer = users.findById(viewerId);
@@ -187,6 +255,25 @@ public class ExpressionService {
             throw notFound();
         }
         return detail(row, actorId, 1, 20);
+    }
+
+    private ExpressionDtos.Replied replayReply(long actorId, long id,
+                                                NotificationOperation previous) {
+        Expression row = access.readable(actorId, id);
+        if (row == null || "WITHDRAWN".equals(row.getStatus())
+                || !"EXPRESSION".equals(previous.getResourceType())
+                || previous.getResourceId() != id
+                || (!"EXPRESSION_REPLY".equals(previous.getAction())
+                && !"EXPRESSION_SUPPLEMENT".equals(previous.getAction()))) {
+            throw notFound();
+        }
+        long replyId = Long.parseLong(business.resultRef(previous, "replyId"));
+        ExpressionReply reply = expressions.reply(replyId, id);
+        if (reply == null || reply.getAuthorId() != actorId) {
+            throw notFound();
+        }
+        return new ExpressionDtos.Replied(replyDto(reply), row.getVersion().toString(),
+                row.getStatus());
     }
 
     private PairConnection lockedPair(long connectionId, long actorId) {

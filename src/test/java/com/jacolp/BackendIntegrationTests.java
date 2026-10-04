@@ -2377,6 +2377,138 @@ class BackendIntegrationTests {
         assertEquals(404, alice.call("GET", "/expressions/" + id, null, null).statusCode());
     }
 
+    @Test
+    void expressionRepliesSettingsAndMailOverrideRemainPrivate() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        JsonNode sent = JSON.readTree(alice.writeWithKey("POST", "/expressions",
+                "{\"connectionId\":\"" + connectionId + "\",\"type\":\"SPEND_TIME\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\",\"followUpMode\":\"IN_APP\"}}",
+                UUID.randomUUID().toString()).body());
+        String id = sent.path("id").asText();
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+        String settingPath = "/notification-settings/EXPRESSION/" + id;
+        assertEquals("IN_APP", JSON.readTree(bob.call("GET", settingPath, null, null).body())
+                .path("followUpMode").asText());
+        assertEquals(409, bob.write("PUT", settingPath,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":\"2\"}").statusCode());
+        JsonNode changed = JSON.readTree(bob.write("PUT", settingPath,
+                "{\"followUpMode\":\"NONE\",\"expectedVersion\":\"1\"}").body());
+        assertEquals("2", changed.path("version").asText());
+        assertEquals("1", JSON.readTree(alice.call("GET", settingPath, null, null).body())
+                .path("version").asText());
+        assertEquals("IN_APP", JSON.readTree(bob.call("GET", "/notification-capabilities"
+                + "?resourceType=EXPRESSION&resourceId=" + id + "&action=EXPRESSION_REPLY",
+                null, null).body()).path("effectiveOutgoingMode").asText());
+        String replies = "/expressions/" + id + "/replies";
+        assertEquals(400, alice.writeWithKey("POST", replies,
+                "{\"expectedVersion\":\"0\",\"preset\":\"LATER\"}",
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(403, bob.call("POST", replies,
+                "{\"expectedVersion\":\"0\",\"preset\":\"LATER\"}", null,
+                UUID.randomUUID().toString()).statusCode());
+        String firstBody = "{\"expectedVersion\":\"0\",\"preset\":\"LATER\"}";
+        String key = UUID.randomUUID().toString();
+        JsonNode first = JSON.readTree(bob.writeWithKey("POST", replies, firstBody, key).body());
+        assertEquals("RESPONDED", first.path("status").asText());
+        assertEquals("1", first.path("expressionVersion").asText());
+        assertEquals(200, bob.writeWithKey("POST", replies, firstBody, key).statusCode());
+        assertEquals(409, bob.writeWithKey("POST", replies,
+                "{\"expectedVersion\":\"1\",\"body\":\"changed\"}", key).statusCode());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+        JsonNode supplement = JSON.readTree(alice.writeWithKey("POST", replies,
+                "{\"expectedVersion\":\"1\",\"body\":\"another thought\"}",
+                UUID.randomUUID().toString()).body());
+        assertEquals("RESPONDED", supplement.path("status").asText());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+        for (int index = 2; index < 25; index++) {
+            assertEquals(200, bob.writeWithKey("POST", replies,
+                    "{\"expectedVersion\":\"" + index + "\",\"body\":\"reply "
+                            + index + "\"}", UUID.randomUUID().toString()).statusCode());
+        }
+        JsonNode detail = JSON.readTree(alice.call("GET", "/expressions/" + id
+                + "?replyPage=2&replySize=20", null, null).body());
+        assertEquals(25, detail.path("replies").path("total").asInt());
+        assertEquals(5, detail.path("replies").path("items").size());
+        assertEquals(25, detail.path("replyCount").asInt());
+        assertEquals(409, alice.writeWithKey("POST", replies,
+                "{\"expectedVersion\":\"1\",\"body\":\"stale\"}",
+                UUID.randomUUID().toString()).statusCode());
+        jdbc.update("UPDATE notification_setting SET follow_up_mode = 'IN_APP_AND_MAIL', "
+                + "version = version + 1 WHERE user_id = ? AND resource_type = 'EXPRESSION' "
+                + "AND resource_id = ?", users.findByUsername("alice").getId(), Long.parseLong(id));
+        HttpResponse<String> blocked = bob.writeWithKey("POST", replies,
+                "{\"expectedVersion\":\"25\",\"body\":\"after mail setting\"}",
+                UUID.randomUUID().toString());
+        assertEquals(409, blocked.statusCode());
+        String token = JSON.readTree(blocked.body()).path("details").path("overrideToken").asText();
+        assertFalse(token.isBlank());
+        String choice = "{\"expectedVersion\":\"25\",\"body\":\"after mail setting\","
+                + "\"notificationOverride\":{\"mode\":\"NONE\",\"token\":\"" + token + "\"}}";
+        Browser bobOtherSession = new Browser();
+        bobOtherSession.login("bob", "B-user-test-password-21");
+        assertEquals(409, bobOtherSession.writeWithKey("POST", replies, choice,
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals(200, bob.writeWithKey("POST", replies, choice,
+                UUID.randomUUID().toString()).statusCode());
+        assertEquals("IN_APP_AND_MAIL", JSON.readTree(alice.call("GET", settingPath, null, null)
+                .body()).path("followUpMode").asText());
+        assertEquals(200, alice.write("POST", "/expressions/" + id + "/withdraw",
+                "{\"expectedVersion\":\"26\"}").statusCode());
+        assertEquals(404, bob.call("GET", settingPath, null, null).statusCode());
+        assertEquals(404, bob.writeWithKey("POST", replies, firstBody, key).statusCode());
+    }
+
+    @Test
+    void concurrentSameKeyExpressionReplyIsStoredOnce() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        Browser bobOtherSession = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        bobOtherSession.login("bob", "B-user-test-password-21");
+        String connectionId = connectResult(alice, bob).path("id").asText();
+        String id = JSON.readTree(alice.writeWithKey("POST", "/expressions",
+                "{\"connectionId\":\"" + connectionId + "\",\"type\":\"NEED_SPACE\","
+                        + "\"notificationPlan\":{\"outgoingMode\":\"NONE\",\"followUpMode\":\"IN_APP\"}}",
+                UUID.randomUUID().toString()).body()).path("id").asText();
+        String path = "/expressions/" + id + "/replies";
+        String body = "{\"expectedVersion\":\"0\",\"body\":\"I hear you\"}";
+        String key = UUID.randomUUID().toString();
+        JsonNode bobCsrf = bob.csrf();
+        JsonNode otherCsrf = bobOtherSession.csrf();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<HttpResponse<String>> one = pool.submit(() -> {
+                start.await();
+                return bob.call("POST", path, body, bobCsrf, key);
+            });
+            Future<HttpResponse<String>> two = pool.submit(() -> {
+                start.await();
+                return bobOtherSession.call("POST", path, body, otherCsrf, key);
+            });
+            start.countDown();
+            assertEquals(200, one.get().statusCode());
+            assertEquals(200, two.get().statusCode());
+        } finally {
+            pool.shutdownNow();
+        }
+        assertEquals(1, jdbc.queryForObject(
+                "SELECT COUNT(*) FROM expression_reply WHERE expression_id = ?",
+                Integer.class, Long.parseLong(id)));
+        assertEquals("1", JSON.readTree(alice.call("GET", "/expressions/" + id,
+                null, null).body()).path("version").asText());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/notifications", null, null).body())
+                .path("unreadCount").asInt());
+    }
+
     private long countTag(JsonNode list, String tag) {
         for (JsonNode row : list.path("availableTags")) {
             if (tag.equals(row.path("tag").asText())) {

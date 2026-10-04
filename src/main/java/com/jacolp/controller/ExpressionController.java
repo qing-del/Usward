@@ -3,6 +3,7 @@ package com.jacolp.controller;
 import com.jacolp.dto.ExpressionDtos;
 import com.jacolp.dto.ExpressionRequests;
 import com.jacolp.service.ExpressionService;
+import jakarta.servlet.http.HttpSession;
 import java.security.Principal;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -57,5 +58,15 @@ public class ExpressionController {
                                               Principal principal) {
         return expressions.withdraw(principal.getName(), ExpressionRequests.decimal(id, false),
                 ExpressionRequests.versionOnly(body));
+    }
+
+    @PostMapping("/{id}/replies")
+    public ExpressionDtos.Replied reply(@PathVariable String id,
+                                         @RequestBody Map<String, Object> body,
+                                         @RequestHeader(value = "Idempotency-Key", required = false)
+                                         String key, Principal principal, HttpSession session) {
+        long expressionId = ExpressionRequests.decimal(id, false);
+        return expressions.reply(principal.getName(), expressionId, ExpressionRequests.reply(body),
+                body, key, session);
     }
 }

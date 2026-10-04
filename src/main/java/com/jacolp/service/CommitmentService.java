@@ -7,7 +7,6 @@ import com.jacolp.entity.AppUser;
 import com.jacolp.entity.Commitment;
 import com.jacolp.mapper.CalendarMapper;
 import com.jacolp.mapper.CommitmentMapper;
-import com.jacolp.mapper.MemoryMapper;
 import com.jacolp.mapper.UserMapper;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -24,13 +23,13 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CommitmentService {
     private final CommitmentMapper commitments;
-    private final MemoryMapper memories;
+    private final MemoryAccessService memories;
     private final CalendarMapper events;
     private final UserMapper users;
     private final ReminderService reminders;
     private final ResourceLifecycleService lifecycle;
 
-    public CommitmentService(CommitmentMapper commitments, MemoryMapper memories,
+    public CommitmentService(CommitmentMapper commitments, MemoryAccessService memories,
                              CalendarMapper events, UserMapper users, ReminderService reminders,
                              ResourceLifecycleService lifecycle) {
         this.commitments = commitments;
@@ -219,7 +218,7 @@ public class CommitmentService {
             return false;
         }
         return switch (type) {
-            case "MEMORY_CARD" -> memories.findOwned(id, ownerId) != null;
+            case "MEMORY_CARD" -> memories.readable(ownerId, id) != null;
             case "CALENDAR_EVENT" -> events.findOwned(id, ownerId) != null;
             default -> false;
         };

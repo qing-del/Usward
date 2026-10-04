@@ -25,13 +25,15 @@ public class MemoryService {
     private final UserMapper users;
     private final ReminderService reminders;
     private final ResourceLifecycleService lifecycle;
+    private final MemoryAccessService access;
 
     public MemoryService(MemoryMapper memories, UserMapper users, ReminderService reminders,
-                         ResourceLifecycleService lifecycle) {
+                         ResourceLifecycleService lifecycle, MemoryAccessService access) {
         this.memories = memories;
         this.users = users;
         this.reminders = reminders;
         this.lifecycle = lifecycle;
+        this.access = access;
     }
 
     @Transactional
@@ -47,17 +49,17 @@ public class MemoryService {
         card.setNextAction(input.nextAction());
         memories.insert(card);
         replaceTags(card.getId(), input.tags());
-        return detail(memories.findOwned(card.getId(), owner.getId()));
+        return detail(memories.findOwned(card.getId(), owner.getId()), owner.getId());
     }
 
     @Transactional(readOnly = true)
     public MemoryDtos.Detail get(String username, long id) {
         AppUser owner = owner(username);
-        MemoryCard card = memories.findOwned(id, owner.getId());
+        MemoryCard card = access.readable(owner.getId(), id);
         if (card == null) {
             throw notFound();
         }
-        return detail(card);
+        return detail(card, owner.getId());
     }
 
     @Transactional
@@ -86,7 +88,7 @@ public class MemoryService {
         if (input.present().contains("tags")) {
             replaceTags(id, input.tags());
         }
-        return detail(memories.findOwned(id, owner.getId()));
+        return detail(memories.findOwned(id, owner.getId()), owner.getId());
     }
 
     @Transactional
@@ -98,7 +100,7 @@ public class MemoryService {
             throw new ApiException(HttpStatus.CONFLICT, "INVALID_STATE", "卡片已处于该状态");
         }
         changed(memories.setArchived(id, owner.getId(), expectedVersion, archived));
-        return detail(memories.findOwned(id, owner.getId()));
+        return detail(memories.findOwned(id, owner.getId()), owner.getId());
     }
 
     @Transactional
@@ -126,15 +128,14 @@ public class MemoryService {
         Instant asOf = Instant.now();
         AppUser owner = owner(username);
         String pattern = pattern(keyword);
-        if ("PARTNER".equals(scope)) {
-            return new MemoryDtos.Page(List.of(), 0, page, size, false, asOf, List.of());
-        }
-        long total = memories.count(owner.getId(), archived, pattern, category, tag);
-        List<MemoryCard> cards = memories.page(owner.getId(), archived, pattern, category, tag,
-                size, ((long) page - 1) * size);
-        List<MemoryDtos.Summary> items = summaries(cards, owner);
+        Long connectionId = access.activeConnectionId(owner.getId());
+        long total = memories.count(owner.getId(), connectionId, scope, archived, pattern,
+                category, tag);
+        List<MemoryCard> cards = memories.page(owner.getId(), connectionId, scope, archived,
+                pattern, category, tag, size, ((long) page - 1) * size);
+        List<MemoryDtos.Summary> items = summaries(cards);
         List<MemoryDtos.TagCount> availableTags = memories.availableTags(
-                owner.getId(), archived, pattern, category).stream()
+                owner.getId(), connectionId, scope, archived, pattern, category).stream()
                 .map(row -> new MemoryDtos.TagCount(row.getTag(), row.getCount())).toList();
         return new MemoryDtos.Page(items, total, page, size, (long) page * size < total,
                 asOf, availableTags);
@@ -142,24 +143,32 @@ public class MemoryService {
 
     @Transactional(readOnly = true)
     public MemoryDtos.Summary latestOwnSummary(AppUser owner) {
-        List<MemoryCard> cards = memories.page(owner.getId(), false, null, null, null, 1, 0);
-        return cards.isEmpty() ? null : summaries(cards, owner).getFirst();
+        List<MemoryCard> cards = memories.page(owner.getId(), null, "MINE", false,
+                null, null, null, 1, 0);
+        return cards.isEmpty() ? null : summaries(cards).getFirst();
     }
 
-    private List<MemoryDtos.Summary> summaries(List<MemoryCard> cards, AppUser owner) {
+    private List<MemoryDtos.Summary> summaries(List<MemoryCard> cards) {
         Map<Long, List<String>> tagsByCard = new HashMap<>();
+        Map<Long, MemoryDtos.PublicOwner> owners = new HashMap<>();
         if (!cards.isEmpty()) {
             for (MemoryTag row : memories.tagsForCards(cards.stream().map(MemoryCard::getId).toList())) {
                 tagsByCard.computeIfAbsent(row.getCardId(), ignored -> new ArrayList<>()).add(row.getTag());
             }
+            for (MemoryCard card : cards) {
+                owners.computeIfAbsent(card.getOwnerId(), id -> {
+                    AppUser author = users.findById(id);
+                    return new MemoryDtos.PublicOwner(id.toString(), author.getNickname(),
+                            author.getAvatarStyle());
+                });
+            }
         }
-        MemoryDtos.PublicOwner publicOwner = new MemoryDtos.PublicOwner(
-                owner.getId().toString(), owner.getNickname(), owner.getAvatarStyle());
         return cards.stream().map(card -> new MemoryDtos.Summary(
                 card.getId().toString(), card.getVersion().toString(), utc(card.getCreatedAt()),
-                utc(card.getUpdatedAt()), owner.getId().toString(), publicOwner,
+                utc(card.getUpdatedAt()), card.getOwnerId().toString(), owners.get(card.getOwnerId()),
                 card.getTitle(), card.getCategory(), tagsByCard.getOrDefault(card.getId(), List.of()),
-                card.getSourceType(), null)).toList();
+                card.getSourceType(), card.getSharedConnectionId() == null ? null
+                : card.getSharedConnectionId().toString())).toList();
     }
 
     private AppUser owner(String username) {
@@ -198,13 +207,14 @@ public class MemoryService {
         }
     }
 
-    private MemoryDtos.Detail detail(MemoryCard card) {
+    private MemoryDtos.Detail detail(MemoryCard card, long viewerId) {
         return new MemoryDtos.Detail(card.getId().toString(), card.getVersion().toString(),
                 utc(card.getCreatedAt()), utc(card.getUpdatedAt()), card.getOwnerId().toString(),
                 card.getSharedConnectionId() == null ? null : card.getSharedConnectionId().toString(),
                 card.getTitle(), card.getBody(), card.getCategory(), memories.tagsForCard(card.getId()),
-                card.getSourceType(), card.getSourceDate(), card.getNextAction(), card.isArchived(),
-                reminders.forResource(card.getOwnerId(), "MEMORY_CARD", card.getId()), null);
+                card.getSourceType(), card.getSourceDate(), card.getNextAction(),
+                card.getOwnerId() == viewerId ? card.isArchived() : null,
+                reminders.forResource(viewerId, "MEMORY_CARD", card.getId()), null);
     }
 
     private Instant utc(LocalDateTime value) {

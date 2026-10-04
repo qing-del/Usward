@@ -30,9 +30,9 @@ public class ReminderDispatchService {
         if (candidate == null || !"PENDING".equals(candidate.getStatus())) {
             return false;
         }
-        AppUser recipient = users.lockById(candidate.getRecipientId());
-        boolean accessible = recipient != null && access.lockAccessible(recipient.getId(),
+        boolean accessible = access.lockAccessible(candidate.getRecipientId(),
                 candidate.getResourceType(), candidate.getResourceId(), true);
+        AppUser recipient = users.findById(candidate.getRecipientId());
         Reminder current = reminders.lockOwned(id, candidate.getRecipientId());
         if (current == null || !"PENDING".equals(current.getStatus())) {
             return false;

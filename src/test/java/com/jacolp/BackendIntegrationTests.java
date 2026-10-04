@@ -1702,6 +1702,65 @@ class BackendIntegrationTests {
     }
 
     @Test
+    void seededSharedCardsUseCurrentPairAcrossReadsRemindersAndSources() throws Exception {
+        Browser alice = new Browser();
+        Browser bob = new Browser();
+        alice.login("alice", "A-user-test-password-21");
+        bob.login("bob", "B-user-test-password-21");
+        JsonNode pair = connectResult(alice, bob);
+        JsonNode shared = JSON.readTree(alice.write("POST", "/memories", """
+                {"body":"shared flower", "tags":["shared-tag"]}
+                """).body());
+        JsonNode privateCard = JSON.readTree(alice.write("POST", "/memories",
+                "{\"body\":\"private flower\",\"tags\":[\"private-tag\"]}").body());
+        long cardId = Long.parseLong(shared.path("id").asText());
+        jdbc.update("UPDATE memory_card SET shared_connection_id = ?, archived = TRUE WHERE id = ?",
+                Long.parseLong(pair.path("id").asText()), cardId);
+
+        JsonNode detail = JSON.readTree(bob.call("GET", "/memories/" + cardId, null, null).body());
+        assertEquals("shared flower", detail.path("body").asText());
+        assertTrue(detail.path("archived").isNull());
+        assertTrue(detail.path("myReminder").isNull());
+        assertEquals(404, bob.call("GET", "/memories/" + privateCard.path("id").asText(),
+                null, null).statusCode());
+        JsonNode partner = JSON.readTree(bob.call("GET", "/memories?scope=PARTNER", null, null).body());
+        assertEquals(1, partner.path("total").asInt());
+        assertEquals(1, countTag(partner, "shared-tag"));
+        assertEquals(0, countTag(partner, "private-tag"));
+        assertEquals(1, JSON.readTree(bob.call("GET", "/memories?keyword=shared", null, null)
+                .body()).path("total").asInt());
+        assertEquals(1, JSON.readTree(alice.call("GET", "/memories", null, null)
+                .body()).path("total").asInt());
+
+        JsonNode bobReminder = JSON.readTree(bob.write("PUT", "/reminders", """
+                {"resourceType":"MEMORY_CARD","resourceId":"%s",
+                 "scheduledAt":"2027-01-01T00:00:00Z","expectedRevision":null}
+                """.formatted(cardId)).body());
+        assertEquals(bobReminder.path("id").asText(), JSON.readTree(bob.call("GET",
+                "/memories/" + cardId, null, null).body()).path("myReminder").path("id").asText());
+        assertTrue(JSON.readTree(alice.call("GET", "/memories/" + cardId, null, null)
+                .body()).path("myReminder").isNull());
+        JsonNode commitment = JSON.readTree(bob.write("POST", "/commitments",
+                "{\"title\":\"follow up\",\"sourceType\":\"MEMORY_CARD\",\"sourceId\":\""
+                        + cardId + "\"}").body());
+        assertTrue(commitment.path("sourceAvailable").asBoolean());
+        long bobId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'bob'", Long.class);
+        jdbc.update("INSERT INTO notification (recipient_id, kind, resource_type, resource_id, "
+                + "message, dedupe_key) VALUES (?, 'MEMORY_SHARED', 'MEMORY_CARD', ?, 'shared', 'seed-shared')",
+                bobId, cardId);
+        assertEquals(1, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+        jdbc.update("UPDATE memory_card SET shared_connection_id = NULL WHERE id = ?", cardId);
+        assertEquals(404, bob.call("GET", "/memories/" + cardId, null, null).statusCode());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/memories?scope=PARTNER", null, null)
+                .body()).path("total").asInt());
+        assertFalse(JSON.readTree(bob.call("GET", "/commitments/" + commitment.path("id").asText(),
+                null, null).body()).path("sourceAvailable").asBoolean());
+        assertEquals(0, JSON.readTree(bob.call("GET", "/notifications", null, null)
+                .body()).path("unreadCount").asInt());
+    }
+
+    @Test
     void paginationSearchAndTagCountsUseTheFullAuthorizedSet() throws Exception {
         Browser alice = new Browser();
         assertEquals(200, alice.login("alice", "A-user-test-password-21").statusCode());
@@ -1817,6 +1876,13 @@ class BackendIntegrationTests {
 
     private String credentials(String username, String password) {
         return "{\"username\":\"" + username + "\",\"password\":\"" + password + "\"}";
+    }
+
+    private JsonNode connectResult(Browser inviter, Browser acceptor) throws Exception {
+        JsonNode invite = JSON.readTree(inviter.write("POST", "/connection-invites", null).body());
+        return JSON.readTree(acceptor.write("POST", "/connection-invites/accept",
+                "{\"token\":\"" + invite.path("token").asText()
+                        + "\",\"expectedVersion\":\"0\"}").body());
     }
 
     private class Browser {

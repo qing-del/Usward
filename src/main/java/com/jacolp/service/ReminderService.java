@@ -8,7 +8,6 @@ import com.jacolp.entity.Commitment;
 import com.jacolp.entity.Reminder;
 import com.jacolp.mapper.CalendarMapper;
 import com.jacolp.mapper.CommitmentMapper;
-import com.jacolp.mapper.MemoryMapper;
 import com.jacolp.mapper.ReminderMapper;
 import com.jacolp.mapper.UserMapper;
 import java.time.Instant;
@@ -24,12 +23,12 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class ReminderService {
     private final ReminderMapper reminders;
-    private final MemoryMapper memories;
+    private final MemoryAccessService memories;
     private final CalendarMapper events;
     private final CommitmentMapper commitments;
     private final UserMapper users;
 
-    public ReminderService(ReminderMapper reminders, MemoryMapper memories,
+    public ReminderService(ReminderMapper reminders, MemoryAccessService memories,
                            CalendarMapper events, CommitmentMapper commitments, UserMapper users) {
         this.reminders = reminders;
         this.memories = memories;
@@ -40,10 +39,11 @@ public class ReminderService {
 
     @Transactional
     public ReminderDtos.Detail put(String username, ReminderWriteRequest input) {
-        AppUser owner = owner(username, true);
+        AppUser owner = owner(username, false);
         if (!lockAccessible(owner.getId(), input.resourceType(), input.resourceId(), true)) {
             throw notFound();
         }
+        owner = users.findById(owner.getId());
         Reminder current = reminders.lockResource(owner.getId(), input.resourceType(),
                 input.resourceId());
         if ((current == null && input.expectedRevision() != null)
@@ -83,7 +83,7 @@ public class ReminderService {
 
     @Transactional
     public ReminderDtos.Detail cancel(String username, long id, long expectedRevision) {
-        AppUser owner = owner(username, true);
+        AppUser owner = owner(username, false);
         Reminder candidate = reminders.findOwned(id, owner.getId());
         if (candidate == null || !lockAccessible(owner.getId(), candidate.getResourceType(),
                 candidate.getResourceId(), false)) {
@@ -155,7 +155,7 @@ public class ReminderService {
 
     public boolean accessible(long recipientId, String type, long resourceId) {
         return switch (type) {
-            case "MEMORY_CARD" -> memories.findOwned(resourceId, recipientId) != null;
+            case "MEMORY_CARD" -> memories.readable(recipientId, resourceId) != null;
             case "CALENDAR_EVENT" -> events.findOwned(resourceId, recipientId) != null;
             case "COMMITMENT" -> commitments.findOwned(resourceId, recipientId) != null;
             default -> false;
@@ -163,8 +163,11 @@ public class ReminderService {
     }
 
     public boolean lockAccessible(long recipientId, String type, long resourceId, boolean forSetting) {
+        if ("MEMORY_CARD".equals(type)) {
+            return memories.lockReadable(recipientId, resourceId) != null;
+        }
+        users.lockById(recipientId);
         return switch (type) {
-            case "MEMORY_CARD" -> memories.lockOwned(resourceId, recipientId) != null;
             case "CALENDAR_EVENT" -> events.lockOwned(resourceId, recipientId) != null;
             case "COMMITMENT" -> {
                 Commitment row = commitments.lockOwned(resourceId, recipientId);
